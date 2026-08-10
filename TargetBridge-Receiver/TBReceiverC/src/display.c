@@ -40,9 +40,7 @@ struct tb_display {
     int           is_connecting;
     int           input_capture_active;
     int           input_intercept_active;
-    struct tb_input_event input_events[128];
-    int           input_head;
-    int           input_tail;
+    struct tb_input_queue input_queue;
     uint32_t      last_target_switch_tick;
     uint32_t      last_space_switch_tick;
     uint32_t      last_space_gesture_tick;
@@ -182,12 +180,7 @@ static uint16_t tb_disp_mac_keycode_for_sdl_scancode(SDL_Scancode scancode) {
 
 static void tb_disp_queue_input_event(struct tb_display *d, const struct tb_input_event *event) {
     if (!d || !event) return;
-    int next = (d->input_head + 1) % 128;
-    if (next == d->input_tail) {
-        d->input_tail = (d->input_tail + 1) % 128;
-    }
-    d->input_events[d->input_head] = *event;
-    d->input_head = next;
+    (void)tb_input_queue_push(&d->input_queue, event);
 }
 
 static void tb_disp_destroy_status_texture(struct tb_display *d) {
@@ -1313,10 +1306,7 @@ unsigned int tb_disp_poll_actions(struct tb_display *d) {
 
 int tb_disp_pop_input_event(struct tb_display *d, struct tb_input_event *out) {
     if (!d || !out) return 0;
-    if (d->input_tail == d->input_head) return 0;
-    *out = d->input_events[d->input_tail];
-    d->input_tail = (d->input_tail + 1) % 128;
-    return 1;
+    return tb_input_queue_pop(&d->input_queue, out);
 }
 
 int tb_disp_get_info(struct tb_display *d, struct tb_display_info *info) {
