@@ -1,6 +1,7 @@
 #import "tb_gesture_bridge.h"
 
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 #include <stdio.h>
 
 static NSWindow *tb_receiver_content_window(void) {
@@ -17,6 +18,28 @@ static NSWindow *tb_receiver_content_window(void) {
         }
     }
     return content;
+}
+
+int tb_receiver_content_display_pixels(uint32_t *width, uint32_t *height) {
+    if (!width || !height) return -1;
+    *width = 0;
+    *height = 0;
+
+    @autoreleasepool {
+        NSWindow *content = tb_receiver_content_window();
+        NSScreen *screen = content.screen ?: NSScreen.mainScreen;
+        NSNumber *screen_number = screen.deviceDescription[@"NSScreenNumber"];
+        if (!screen_number) return -1;
+
+        CGDirectDisplayID display = (CGDirectDisplayID)screen_number.unsignedIntValue;
+        const size_t pixels_w = CGDisplayPixelsWide(display);
+        const size_t pixels_h = CGDisplayPixelsHigh(display);
+        if (!pixels_w || !pixels_h) return -1;
+
+        *width = (uint32_t)pixels_w;
+        *height = (uint32_t)pixels_h;
+        return 0;
+    }
 }
 
 static BOOL g_monitor_shield_active = NO;

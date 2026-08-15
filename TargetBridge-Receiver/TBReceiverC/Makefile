@@ -34,7 +34,7 @@ ifeq ($(UNAME_S),Darwin)
 LDFLAGS  += -framework ApplicationServices -framework AppKit -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework IOSurface -framework CoreServices -framework CoreAudio -framework SystemConfiguration
 endif
 
-C_SRC = src/main.c src/net.c src/decoder.c src/display.c src/tb_i18n.c
+C_SRC = src/main.c src/net.c src/decoder.c src/display.c src/receiver_profile.c src/tb_i18n.c
 OBJC_SRC = src/tb_gesture_bridge.m src/tb_display_tweaks.m
 OBJ = $(C_SRC:.c=.o) $(OBJC_SRC:.m=.o)
 BIN = tbreceiver
@@ -60,12 +60,16 @@ TEST_LDFLAGS =
 ifeq ($(UNAME_S),Darwin)
 TEST_LDFLAGS += -framework CoreFoundation -framework SystemConfiguration
 endif
-TEST_BIN = test_net_parser
+TEST_BIN = test_net_parser test_receiver_profile
 
-$(TEST_BIN): tests/test_net_parser.c src/net.c src/net.h src/proto.h
+test_net_parser: tests/test_net_parser.c src/net.c src/net.h src/proto.h
 	$(CC) $(TEST_CFLAGS) -Isrc tests/test_net_parser.c src/net.c $(TEST_LDFLAGS) -o $@
 
 test: $(TEST_BIN)
-	./$(TEST_BIN)
+	./test_net_parser
+	./test_receiver_profile
+
+test_receiver_profile: tests/test_receiver_profile.c src/receiver_profile.c src/receiver_profile.h
+	$(CC) $(TEST_CFLAGS) -Isrc tests/test_receiver_profile.c src/receiver_profile.c -o $@
 
 .PHONY: all clean test

@@ -16,6 +16,7 @@
 #include "net.h"
 #include "decoder.h"
 #include "display.h"
+#include "receiver_profile.h"
 #include "proto.h"
 #include "tb_gesture_bridge.h"
 #include "tb_display_tweaks.h"
@@ -1733,17 +1734,12 @@ static void send_receiver_info(struct app *a) {
     struct tb_display_info info;
     if (tb_disp_get_info(a->disp, &info) < 0) return;
 
-    /* Always advertise the intended iMac target panel, not the transient
-     * SDL window/debug drawable size. Using the drawable here breaks the
-     * sender's virtual display creation path when running windowed or on
-     * scaled desktops because macOS rejects a HiDPI mode larger than the
-     * advertised backing panel. */
-    const uint32_t panel_w = 5120;
-    const uint32_t panel_h = 2880;
-    const uint32_t mode_w = 2560;
-    const uint32_t mode_h = 1440;
-    const uint32_t capture_w = 2560;
-    const uint32_t capture_h = 1440;
+    struct tb_receiver_profile profile;
+    if (tb_receiver_profile_from_dimensions(info.logical_w, info.logical_h,
+                                            info.active_w, info.active_h,
+                                            &profile) < 0) {
+        return;
+    }
 
     char escaped_name[256];
     size_t out = 0;
@@ -1764,16 +1760,17 @@ static void send_receiver_info(struct app *a) {
         sizeof(json),
         "{\"receiverName\":\"%s\",\"panelWidth\":%u,\"panelHeight\":%u,"
         "\"modeWidth\":%u,\"modeHeight\":%u,\"refreshRate\":60,"
-        "\"hiDPI\":true,\"captureWidth\":%u,\"captureHeight\":%u,"
+        "\"hiDPI\":%s,\"captureWidth\":%u,\"captureHeight\":%u,"
         "\"supportsHEVCDecode\":%s,\"supportsRawNV12\":true,\"inputMonitoringTrusted\":%s,\"accessibilityTrusted\":%s,"
         "\"supportsNightShift\":%s,\"supportsTrueTone\":%s}",
         escaped_name,
-        panel_w,
-        panel_h,
-        mode_w,
-        mode_h,
-        capture_w,
-        capture_h,
+        profile.panel_w,
+        profile.panel_h,
+        profile.mode_w,
+        profile.mode_h,
+        profile.hi_dpi ? "true" : "false",
+        profile.capture_w,
+        profile.capture_h,
         tb_dec_supports_hevc_hwdecode() ? "true" : "false",
         tb_receiver_input_monitoring_trusted() ? "true" : "false",
         tb_receiver_accessibility_trusted() ? "true" : "false",
@@ -1791,8 +1788,9 @@ static void send_receiver_info(struct app *a) {
 
     if (send_all(a->client_fd, pkt, packet_len) == 0) {
         fprintf(stderr,
-                "[main] sent display profile: panel=%ux%u mode=%ux%u hidpi name=%s\n",
-                panel_w, panel_h, mode_w, mode_h, info.name);
+                "[main] sent display profile: panel=%ux%u mode=%ux%u hidpi=%d name=%s\n",
+                profile.panel_w, profile.panel_h, profile.mode_w, profile.mode_h,
+                profile.hi_dpi, info.name);
     }
     free(pkt);
 }
