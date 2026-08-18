@@ -350,6 +350,18 @@ enum TBInputControlRole: String, CaseIterable, Identifiable {
     case receiverMaster
 
     var id: String { rawValue }
+
+    func usesLowLatencyCursorOverlay(largeCursorEnabled: Bool) -> Bool {
+        largeCursorEnabled || self == .receiverMaster
+    }
+
+    func changesCursorCaptureMode(
+        from previousRole: TBInputControlRole,
+        largeCursorEnabled: Bool
+    ) -> Bool {
+        usesLowLatencyCursorOverlay(largeCursorEnabled: largeCursorEnabled)
+            != previousRole.usesLowLatencyCursorOverlay(largeCursorEnabled: largeCursorEnabled)
+    }
 }
 
 enum TBInputGestureMode: String, CaseIterable, Identifiable {
@@ -1179,6 +1191,10 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     }
     @Published var inputControlRole: TBInputControlRole = .off {
         didSet {
+            let cursorCaptureModeChanged = inputControlRole.changesCursorCaptureMode(
+                from: oldValue,
+                largeCursorEnabled: largeCursor
+            )
             inputRelayActive = (inputControlRole == .senderMaster)
             if inputControlRole != .receiverMaster {
                 injectedRemoteMouseLocation = nil
@@ -1186,6 +1202,9 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 releaseInjectedModifiersIfNeeded()
                 remoteHeldModifierKeyCodes.removeAll()
                 suppressedTriggerKeyCode = nil
+            }
+            if cursorCaptureModeChanged, isStreaming {
+                restartCaptureNow()
             }
         }
     }
@@ -2567,6 +2586,9 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 }
             }
 
+            let usesCursorOverlay = inputControlRole.usesLowLatencyCursorOverlay(
+                largeCursorEnabled: largeCursor
+            )
             let configuration = SCStreamConfiguration()
             configuration.width = preset.width
             configuration.height = preset.height
@@ -2574,7 +2596,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             configuration.queueDepth = preset.queueDepth
             configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
             configuration.shouldBeOpaque = true
-            configuration.showsCursor = !largeCursor
+            configuration.showsCursor = !usesCursorOverlay
             configuration.scalesToFit = true
             configuration.captureResolution = preset.captureResolution
             configuration.capturesAudio = shouldRelayAudio
@@ -2626,7 +2648,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             try await stream.startCapture()
             scStream = stream
             isStreaming = true
-            if largeCursor { startCursorUpdates(displayID: display.displayID) }
+            if usesCursorOverlay { startCursorUpdates(displayID: display.displayID) }
             beginCaptureActivity(wakeDisplay: false)
             startFPSTimer()
             startCaptureWatchdog()
@@ -2676,6 +2698,9 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
 
     private func startDirectDisplayStream(displayID: CGDirectDisplayID, preset: TBDisplayCapturePreset) -> Bool {
         guard let pipeline else { return false }
+        let usesCursorOverlay = inputControlRole.usesLowLatencyCursorOverlay(
+            largeCursorEnabled: largeCursor
+        )
         let codecName = activeCodecName ?? codecName(for: activeCodecType ?? preset.codecType)
         streamResolutionText = TBDisplaySenderL10n.streamSummary(
             preset: preset,
@@ -2687,14 +2712,14 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         // Deliver frames straight onto the pipeline's own queue — the handler
         // runs there, so encode happens off the main thread with no extra hop.
         let directCapture = TBDirectDisplayStreamCapture(pipeline: pipeline, queue: pipeline.queue)
-        guard directCapture.start(displayID: displayID, preset: preset, showCursor: !largeCursor) else {
+        guard directCapture.start(displayID: displayID, preset: preset, showCursor: !usesCursorOverlay) else {
             return false
         }
 
         directDisplayStream = directCapture
         captureDisplayText = TBDisplaySenderL10n.captureDisplayCGDisplayStream(language, id: displayID)
         isStreaming = true
-        if largeCursor { startCursorUpdates(displayID: displayID) }
+        if usesCursorOverlay { startCursorUpdates(displayID: displayID) }
         beginCaptureActivity(wakeDisplay: false)
         startFPSTimer()
         startCaptureWatchdog()
@@ -3076,7 +3101,10 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             return
         }
 
-        guard largeCursor, isStreaming, cursorDisplayID != kCGNullDirectDisplay else { return }
+        let usesCursorOverlay = inputControlRole.usesLowLatencyCursorOverlay(
+            largeCursorEnabled: largeCursor
+        )
+        guard usesCursorOverlay, isStreaming, cursorDisplayID != kCGNullDirectDisplay else { return }
         startCursorUpdates(displayID: cursorDisplayID)
     }
 

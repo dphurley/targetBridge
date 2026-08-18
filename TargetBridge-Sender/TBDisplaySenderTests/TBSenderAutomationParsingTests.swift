@@ -8,6 +8,54 @@ import XCTest
 /// silently reroute automation traffic.
 @MainActor
 final class TBSenderAutomationParsingTests: XCTestCase {
+    func testReceiverControlUsesSeparateCursorOverlayWithoutLargeCursor() {
+        XCTAssertTrue(
+            TBInputControlRole.receiverMaster.usesLowLatencyCursorOverlay(
+                largeCursorEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            TBInputControlRole.senderMaster.usesLowLatencyCursorOverlay(
+                largeCursorEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            TBInputControlRole.off.usesLowLatencyCursorOverlay(
+                largeCursorEnabled: false
+            )
+        )
+        XCTAssertTrue(
+            TBInputControlRole.off.usesLowLatencyCursorOverlay(
+                largeCursorEnabled: true
+            )
+        )
+
+        XCTAssertTrue(
+            TBInputControlRole.receiverMaster.changesCursorCaptureMode(
+                from: .off,
+                largeCursorEnabled: false
+            )
+        )
+        XCTAssertTrue(
+            TBInputControlRole.off.changesCursorCaptureMode(
+                from: .receiverMaster,
+                largeCursorEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            TBInputControlRole.senderMaster.changesCursorCaptureMode(
+                from: .off,
+                largeCursorEnabled: false
+            )
+        )
+        XCTAssertFalse(
+            TBInputControlRole.receiverMaster.changesCursorCaptureMode(
+                from: .off,
+                largeCursorEnabled: true
+            )
+        )
+    }
+
     func testHighFrameRatePresetsUseFiveCaptureSurfaces() {
         XCTAssertEqual(TBDisplayCapturePreset.standard1440p.queueDepth, 3)
         XCTAssertEqual(TBDisplayCapturePreset.smooth1440p60.queueDepth, 5)
