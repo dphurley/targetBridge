@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "input_queue.h"
+
 struct tb_display;
 
 struct tb_display_info {
@@ -22,38 +24,6 @@ enum tb_display_action {
     TB_DISP_ACTION_NONE = 0,
     TB_DISP_ACTION_QUIT = 1 << 0,
     TB_DISP_ACTION_CYCLE_LANGUAGE = 1 << 1
-};
-
-enum tb_input_event_kind {
-    TB_INPUT_EVENT_NONE = 0,
-    TB_INPUT_EVENT_MOVE,
-    TB_INPUT_EVENT_LEFT_DRAG,
-    TB_INPUT_EVENT_RIGHT_DRAG,
-    TB_INPUT_EVENT_OTHER_DRAG,
-    TB_INPUT_EVENT_SCROLL,
-    TB_INPUT_EVENT_LEFT_DOWN,
-    TB_INPUT_EVENT_LEFT_UP,
-    TB_INPUT_EVENT_RIGHT_DOWN,
-    TB_INPUT_EVENT_RIGHT_UP,
-    TB_INPUT_EVENT_OTHER_DOWN,
-    TB_INPUT_EVENT_OTHER_UP,
-    TB_INPUT_EVENT_KEY_DOWN,
-    TB_INPUT_EVENT_KEY_UP,
-    TB_INPUT_EVENT_SWITCH_PREV_TARGET,
-    TB_INPUT_EVENT_SWITCH_NEXT_TARGET,
-    TB_INPUT_EVENT_SWITCH_PREV_SPACE,
-    TB_INPUT_EVENT_SWITCH_NEXT_SPACE,
-    TB_INPUT_EVENT_DEACTIVATE_CONTROL
-};
-
-struct tb_input_event {
-    enum tb_input_event_kind kind;
-    int dx;
-    int dy;
-    int scroll_x;
-    int scroll_y;
-    uint16_t key_code;
-    int click_count;
 };
 
 struct tb_display *tb_disp_create(int fullscreen);
