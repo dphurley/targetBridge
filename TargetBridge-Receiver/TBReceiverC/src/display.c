@@ -1319,8 +1319,10 @@ int tb_disp_get_info(struct tb_display *d, struct tb_display_info *info) {
 
     SDL_DisplayMode mode;
     if (SDL_GetCurrentDisplayMode(display_index, &mode) == 0) {
-        info->active_w = (uint32_t)mode.w;
-        info->active_h = (uint32_t)mode.h;
+        info->logical_w = (uint32_t)mode.w;
+        info->logical_h = (uint32_t)mode.h;
+        info->active_w = info->logical_w;
+        info->active_h = info->logical_h;
     }
 
     int window_w = 0, window_h = 0;
@@ -1331,12 +1333,17 @@ int tb_disp_get_info(struct tb_display *d, struct tb_display_info *info) {
         info->drawable_h = (uint32_t)drawable_h;
     }
 
-    /* On Retina/5K macOS displays SDL_GetCurrentDisplayMode may report the
-     * logical desktop size (for example 2560x1440) while the renderer
-     * drawable exposes the true backing pixel size (for example 5120x2880).
-     * For the TB stream UI we want the actual panel pixel size. */
-    if (info->drawable_w > info->active_w) info->active_w = info->drawable_w;
-    if (info->drawable_h > info->active_h) info->active_h = info->drawable_h;
+    /* SDL reports a logical desktop mode on Retina displays. Query the
+     * receiver window's NSScreen for native pixels instead of using its
+     * transient drawable, which is only window-sized before fullscreen. */
+    uint32_t native_w = 0, native_h = 0;
+    if (tb_receiver_content_display_pixels(&native_w, &native_h) == 0) {
+        info->active_w = native_w;
+        info->active_h = native_h;
+    } else {
+        if (info->drawable_w > info->active_w) info->active_w = info->drawable_w;
+        if (info->drawable_h > info->active_h) info->active_h = info->drawable_h;
+    }
 
     info->window_w = (uint32_t)window_w;
     info->window_h = (uint32_t)window_h;
