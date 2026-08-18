@@ -11,6 +11,7 @@
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
+#include <libswscale/swscale.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +31,11 @@ struct tb_decoder {
     AVBufferRef      *hw_dev;
     AVFrame          *hw_frame;
     AVFrame          *sw_frame;
+    AVFrame          *nv12_frame;
     AVPacket         *pkt;
+    struct SwsContext *sws;
+    enum AVPixelFormat hw_pix_fmt;
+    int               using_software_decode;
 
     uint8_t          *extradata;
     int               extradata_size;
@@ -58,15 +63,26 @@ static enum AVHWDeviceType pick_hwdev(void) {
 #endif
 }
 
-static enum AVPixelFormat hw_pix_fmt;
-
 static enum AVPixelFormat get_hw_format(AVCodecContext *ctx,
                                         const enum AVPixelFormat *pix_fmts) {
-    (void)ctx;
+    struct tb_decoder *d = (struct tb_decoder *)ctx->opaque;
     for (const enum AVPixelFormat *p = pix_fmts; *p != -1; p++) {
-        if (*p == hw_pix_fmt) return *p;
+        if (d && *p == d->hw_pix_fmt) return *p;
     }
-    fprintf(stderr, "[dec] no HW pix fmt available\n");
+
+    /* VideoToolbox can advertise a codec but still reject an individual
+     * stream on older GPUs. FFmpeg calls get_format again with software
+     * formats in that case; accepting one keeps the session usable. */
+    if (pix_fmts && *pix_fmts != AV_PIX_FMT_NONE) {
+        if (d && !d->using_software_decode) {
+            d->using_software_decode = 1;
+            fprintf(stderr, "[dec] hardware decode unavailable for this stream; using software (%s)\n",
+                    av_get_pix_fmt_name(*pix_fmts));
+        }
+        return *pix_fmts;
+    }
+
+    fprintf(stderr, "[dec] no compatible pixel format available\n");
     return AV_PIX_FMT_NONE;
 }
 
@@ -77,8 +93,9 @@ struct tb_decoder *tb_dec_create(tb_frame_cb cb, void *ud) {
     d->ud       = ud;
     d->hw_frame = av_frame_alloc();
     d->sw_frame = av_frame_alloc();
+    d->nv12_frame = av_frame_alloc();
     d->pkt      = av_packet_alloc();
-    if (!d->hw_frame || !d->sw_frame || !d->pkt) {
+    if (!d->hw_frame || !d->sw_frame || !d->nv12_frame || !d->pkt) {
         tb_dec_destroy(d); return NULL;
     }
     return d;
@@ -129,7 +146,9 @@ void tb_dec_destroy(struct tb_decoder *d) {
     if (d->hw_dev)   av_buffer_unref(&d->hw_dev);
     if (d->hw_frame) av_frame_free(&d->hw_frame);
     if (d->sw_frame) av_frame_free(&d->sw_frame);
+    if (d->nv12_frame) av_frame_free(&d->nv12_frame);
     if (d->pkt)      av_packet_free(&d->pkt);
+    if (d->sws)      sws_freeContext(d->sws);
     av_free(d->extradata);   /* allocated with av_malloc */
     free(d->scratch);
     free(d);
@@ -202,21 +221,22 @@ static int open_decoder(struct tb_decoder *d) {
 
     /* find HW pix fmt that the codec advertises */
     enum AVHWDeviceType type = pick_hwdev();
-    hw_pix_fmt = AV_PIX_FMT_NONE;
+    d->hw_pix_fmt = AV_PIX_FMT_NONE;
+    d->using_software_decode = 0;
     for (int i = 0;; i++) {
         const AVCodecHWConfig *cfg = avcodec_get_hw_config(d->codec, i);
         if (!cfg) break;
         if ((cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
             cfg->device_type == type) {
-            hw_pix_fmt = cfg->pix_fmt;
+            d->hw_pix_fmt = cfg->pix_fmt;
             break;
         }
     }
-    if (hw_pix_fmt == AV_PIX_FMT_NONE) {
+    if (d->hw_pix_fmt == AV_PIX_FMT_NONE) {
         fprintf(stderr, "[dec] WARNING: no HW pix fmt for codec, using SW decode (slow!)\n");
     } else {
         fprintf(stderr, "[dec] HW decode pix_fmt=%s device=%s\n",
-                av_get_pix_fmt_name(hw_pix_fmt),
+                av_get_pix_fmt_name(d->hw_pix_fmt),
                 av_hwdevice_get_type_name(type));
     }
 
@@ -224,7 +244,7 @@ static int open_decoder(struct tb_decoder *d) {
     d->ctx = avcodec_alloc_context3(d->codec);
     if (!d->ctx) return -1;
 
-    if (hw_pix_fmt != AV_PIX_FMT_NONE) {
+    if (d->hw_pix_fmt != AV_PIX_FMT_NONE) {
         if (!d->hw_dev) {
             if (av_hwdevice_ctx_create(&d->hw_dev, type, NULL, NULL, 0) < 0) {
                 fprintf(stderr, "[dec] av_hwdevice_ctx_create failed\n");
@@ -233,6 +253,7 @@ static int open_decoder(struct tb_decoder *d) {
         if (d->hw_dev) {
             d->ctx->hw_device_ctx = av_buffer_ref(d->hw_dev);
             d->ctx->get_format    = get_hw_format;
+            d->ctx->opaque        = d;
         }
     }
 
@@ -345,7 +366,7 @@ int tb_dec_feed_frame(struct tb_decoder *d, const uint8_t *avcc, size_t len) {
          * access to the IOSurface-backed NV12 planes without the
          * GPU→staging→CPU copy that av_hwframe_transfer_data performs.
          * Major win on Intel iMac + Radeon (~6× faster in practice). */
-        if (d->hw_frame->format == hw_pix_fmt && d->hw_frame->data[3]) {
+        if (d->hw_frame->format == d->hw_pix_fmt && d->hw_frame->data[3]) {
             CVPixelBufferRef pb = (CVPixelBufferRef)d->hw_frame->data[3];
             if (CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly) == 0) {
                 uint8_t *y   = (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pb, 0);
@@ -364,7 +385,7 @@ int tb_dec_feed_frame(struct tb_decoder *d, const uint8_t *avcc, size_t len) {
 
         /* Generic path: HW transfer (Linux VAAPI / Windows D3D11VA / SW). */
         AVFrame *out = d->hw_frame;
-        if (d->hw_frame->format == hw_pix_fmt) {
+        if (d->hw_frame->format == d->hw_pix_fmt) {
             d->sw_frame->format = AV_PIX_FMT_NV12;
             if (av_hwframe_transfer_data(d->sw_frame, d->hw_frame, 0) < 0) {
                 fprintf(stderr, "[dec] hwframe_transfer failed\n");
@@ -374,13 +395,31 @@ int tb_dec_feed_frame(struct tb_decoder *d, const uint8_t *avcc, size_t len) {
             out = d->sw_frame;
         }
 
-        if (out->format != AV_PIX_FMT_NV12) {
-            fprintf(stderr, "[dec] unexpected pix fmt %d\n", out->format);
-        } else {
+        if (out->format == AV_PIX_FMT_NV12) {
             d->cb(out->data[0], out->linesize[0],
                   out->data[1], out->linesize[1],
                   out->width,   out->height, d->ud);
+        } else {
+            d->sws = sws_getCachedContext(d->sws,
+                                          out->width, out->height, (enum AVPixelFormat)out->format,
+                                          out->width, out->height, AV_PIX_FMT_NV12,
+                                          SWS_BILINEAR, NULL, NULL, NULL);
+            av_frame_unref(d->nv12_frame);
+            d->nv12_frame->format = AV_PIX_FMT_NV12;
+            d->nv12_frame->width = out->width;
+            d->nv12_frame->height = out->height;
+            if (!d->sws || av_frame_get_buffer(d->nv12_frame, 32) < 0) {
+                fprintf(stderr, "[dec] could not allocate NV12 software frame\n");
+            } else if (sws_scale(d->sws, (const uint8_t * const *)out->data, out->linesize,
+                                 0, out->height, d->nv12_frame->data, d->nv12_frame->linesize) <= 0) {
+                fprintf(stderr, "[dec] software frame conversion failed\n");
+            } else {
+                d->cb(d->nv12_frame->data[0], d->nv12_frame->linesize[0],
+                      d->nv12_frame->data[1], d->nv12_frame->linesize[1],
+                      d->nv12_frame->width, d->nv12_frame->height, d->ud);
+            }
         }
+        av_frame_unref(d->nv12_frame);
         av_frame_unref(d->sw_frame);
         av_frame_unref(d->hw_frame);
     }
