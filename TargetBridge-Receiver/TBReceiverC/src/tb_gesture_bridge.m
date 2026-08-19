@@ -32,8 +32,14 @@ int tb_receiver_content_display_pixels(uint32_t *width, uint32_t *height) {
         if (!screen_number) return -1;
 
         CGDirectDisplayID display = (CGDirectDisplayID)screen_number.unsignedIntValue;
-        const size_t pixels_w = CGDisplayPixelsWide(display);
-        const size_t pixels_h = CGDisplayPixelsHigh(display);
+        CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display);
+        const size_t pixels_w = mode
+            ? CGDisplayModeGetPixelWidth(mode)
+            : CGDisplayPixelsWide(display);
+        const size_t pixels_h = mode
+            ? CGDisplayModeGetPixelHeight(mode)
+            : CGDisplayPixelsHigh(display);
+        if (mode) CFRelease(mode);
         if (!pixels_w || !pixels_h) return -1;
 
         *width = (uint32_t)pixels_w;

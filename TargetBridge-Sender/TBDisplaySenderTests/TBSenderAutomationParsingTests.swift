@@ -8,8 +8,8 @@ import XCTest
 /// silently reroute automation traffic.
 @MainActor
 final class TBSenderAutomationParsingTests: XCTestCase {
-    func testReceiverControlUsesSeparateCursorOverlayWithoutLargeCursor() {
-        XCTAssertTrue(
+    func testReceiverControlKeepsNativeCursorWithoutLargeCursor() {
+        XCTAssertFalse(
             TBInputControlRole.receiverMaster.usesLowLatencyCursorOverlay(
                 largeCursorEnabled: false
             )
@@ -30,13 +30,13 @@ final class TBSenderAutomationParsingTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(
+        XCTAssertFalse(
             TBInputControlRole.receiverMaster.changesCursorCaptureMode(
                 from: .off,
                 largeCursorEnabled: false
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             TBInputControlRole.off.changesCursorCaptureMode(
                 from: .receiverMaster,
                 largeCursorEnabled: false

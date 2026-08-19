@@ -352,7 +352,10 @@ enum TBInputControlRole: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     func usesLowLatencyCursorOverlay(largeCursorEnabled: Bool) -> Bool {
-        largeCursorEnabled || self == .receiverMaster
+        // ScreenCaptureKit preserves every native macOS cursor shape, including
+        // temporary system cursors such as the screenshot crosshair. The custom
+        // overlay is reserved for the explicit large-cursor accessibility option.
+        largeCursorEnabled
     }
 
     func changesCursorCaptureMode(
