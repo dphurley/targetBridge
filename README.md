@@ -27,19 +27,18 @@ Thank you to everyone who tests TargetBridge on real hardware, reports issues,
 and improves the project. A special thank-you for this release goes to:
 
 - [@aalpgiray](https://github.com/aalpgiray) for receiver brightness, volume, Night Shift, and True Tone controls.
-- [@preggocl](https://github.com/preggocl) for the Apple Silicon and Intel Sender release build coverage.
-- [@Betafer](https://github.com/Betafer) for measured connection-path selection and Sender automation improvements.
+- [@preggocl](https://github.com/preggocl) for the physical Receiver display profile and the software decode fallback.
+- [@Betafer](https://github.com/Betafer) for input-queue safety and the low-latency Receiver Master cursor overlay.
 
-## TargetBridge 3.5.0
+## TargetBridge 3.5.1
 
-TargetBridge 3.5.0 makes automated connections more reliable while giving
-scripts a controlled way to choose the best available network route:
+TargetBridge 3.5.1 is a maintenance release focused on safer input control,
+accurate Receiver display profiles, and improved compatibility with older Macs:
 
-- use `--path auto` to measure compatible Thunderbolt, USB/USB4, Ethernet, and Wi-Fi paths and choose the fastest one
-- force a preferred route with `--path wired`, `thunderbolt`, `usb`, `ethernet`, or `wifi`
-- run a Sender connection in monitor mode with `--retry`, including safe recovery after a temporary Receiver or cable interruption
-- an explicit Stop or Quit cancels automatic retry, preventing unwanted reconnects
-- keep duplicate-desktop startup resilient when macOS delays publishing a ScreenCaptureKit display
+- preserve keyboard and mouse release events when the Receiver input queue is under pressure
+- use the low-latency cursor overlay in Receiver Master mode to avoid duplicate cursors
+- advertise the Receiver's actual panel geometry instead of always reporting a fixed 5K profile
+- fall back safely to software video decode when VideoToolbox cannot decode a stream on older hardware
 
 It also keeps the established multi-Mac workspace features:
 
