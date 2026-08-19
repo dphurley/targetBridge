@@ -207,6 +207,27 @@ final class TBMonitorProtocolTests: XCTestCase {
         XCTAssertEqual(TBMonitorProtocol.decodeJSON(TBMonitorHeartbeat.self, from: payload)?.sequence, 42)
     }
 
+    func testCursorPayloadPreservesLargeCursorPreference() throws {
+        let cursor = TBMonitorCursor(
+            x: 120,
+            y: 80,
+            width: 2560,
+            height: 1440,
+            visible: true,
+            type: 0,
+            large: false
+        )
+        guard var buffer = TBMonitorProtocol.makeJSONPacket(type: .cursor, value: cursor),
+              let (type, payload) = try TBMonitorProtocol.drainPacket(from: &buffer)
+        else {
+            XCTFail("cursor did not encode and drain")
+            return
+        }
+
+        XCTAssertEqual(type, .cursor)
+        XCTAssertEqual(TBMonitorProtocol.decodeJSON(TBMonitorCursor.self, from: payload)?.large, false)
+    }
+
     func testInputButtonEventRoundTripPreservesClickCount() throws {
         let buttonEvent = TBMonitorInputButtonEvent(kind: "leftDown", clickCount: 2)
         guard var buffer = TBMonitorProtocol.makeJSONPacket(type: .inputEvent, value: buttonEvent),

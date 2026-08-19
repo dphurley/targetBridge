@@ -3085,7 +3085,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             width: capturePreset.width,
             height: capturePreset.height,
             visible: false,
-            type: 0
+            type: 0,
+            large: false
         )
         lastCursorPacket = cursor
         if let packet = TBMonitorProtocol.makeJSONPacket(type: .cursor, value: cursor) {
@@ -3169,7 +3170,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             width: capturePreset.width,
             height: capturePreset.height,
             visible: visible,
-            type: getCurrentCursorType()
+            type: getCurrentCursorType(),
+            large: largeCursor
         )
 
         if !force, let previous = lastCursorPacket {
@@ -3178,7 +3180,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                previous.visible == cursor.visible,
                previous.width == cursor.width,
                previous.height == cursor.height,
-               previous.type == cursor.type {
+               previous.type == cursor.type,
+               previous.large == cursor.large {
                 return
             }
         }

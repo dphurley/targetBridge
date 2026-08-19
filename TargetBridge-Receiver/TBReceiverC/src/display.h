@@ -53,7 +53,8 @@ void tb_disp_set_cursor(struct tb_display *d,
                         int x, int y,
                         int source_w, int source_h,
                         int visible,
-                        int type);
+                        int type,
+                        int large);
 
 void tb_disp_set_brightness(struct tb_display *d, double level);
 

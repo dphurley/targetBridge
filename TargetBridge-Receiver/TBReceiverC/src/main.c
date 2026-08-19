@@ -1111,13 +1111,15 @@ static void on_packet(uint8_t type, const uint8_t *payload, size_t len, void *ud
             int h = 0;
             int visible = 0;
             int type = 0;
+            int large = 0;
             (void)extract_json_int_field(payload, len, "\"x\"", &x);
             (void)extract_json_int_field(payload, len, "\"y\"", &y);
             (void)extract_json_int_field(payload, len, "\"width\"", &w);
             (void)extract_json_int_field(payload, len, "\"height\"", &h);
             (void)extract_json_bool_field(payload, len, "\"visible\"", &visible);
             (void)extract_json_int_field(payload, len, "\"type\"", &type);
-            tb_disp_set_cursor(a->disp, x, y, w, h, visible, type);
+            (void)extract_json_bool_field(payload, len, "\"large\"", &large);
+            tb_disp_set_cursor(a->disp, x, y, w, h, visible, type, large);
         }
         break;
     case TB_PKT_BRIGHTNESS:
@@ -1805,7 +1807,7 @@ static void close_client(struct app *a) {
     SDL_EnableScreenSaver();
     tb_receiver_refresh_input_capture(a);
     tb_disp_set_connection_state(a->disp, 0);
-    tb_disp_set_cursor(a->disp, 0, 0, 1, 1, 0, 0);
+    tb_disp_set_cursor(a->disp, 0, 0, 1, 1, 0, 0, 0);
     tb_refresh_idle_localized_strings(a);
     a->last_clipboard_text[0] = '\0';
     tb_parser_free(&a->parser);

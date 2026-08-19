@@ -76,6 +76,7 @@ struct TBMonitorCursor: Codable {
     var height: Int
     var visible: Bool
     var type: Int
+    var large: Bool
 }
 
 struct TBMonitorInputEvent: Codable {

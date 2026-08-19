@@ -49,6 +49,7 @@ struct tb_display {
     int           cursor_source_w, cursor_source_h;
     int           cursor_visible;
     int           cursor_type;
+    int           cursor_large;
     uint32_t      last_video_frame_time;
     int           system_cursor_hidden;
 
@@ -743,7 +744,9 @@ static void tb_disp_draw_cursor(struct tb_display *d) {
     const double sy = (double)out_h / (double)d->cursor_source_h;
     const int x = (int)((double)d->cursor_x * sx);
     const int y = (int)((double)d->cursor_y * sy);
-    const int size = out_w >= 5000 ? 58 : 44;
+    const int size = d->cursor_large
+        ? (out_w >= 5000 ? 58 : 44)
+        : (out_w >= 5000 ? 32 : 24);
     SDL_BlendMode old_blend = SDL_BLENDMODE_NONE;
     (void)SDL_GetRenderDrawBlendMode(d->ren, &old_blend);
 
@@ -1140,7 +1143,8 @@ void tb_disp_set_cursor(struct tb_display *d,
                         int x, int y,
                         int source_w, int source_h,
                         int visible,
-                        int type) {
+                        int type,
+                        int large) {
     if (!d) return;
     d->cursor_x = x;
     d->cursor_y = y;
@@ -1148,6 +1152,7 @@ void tb_disp_set_cursor(struct tb_display *d,
     d->cursor_source_h = source_h > 0 ? source_h : 1;
     d->cursor_visible = visible;
     d->cursor_type = type;
+    d->cursor_large = large;
 
     uint32_t now = SDL_GetTicks();
     if (now - d->last_video_frame_time > 40) {
