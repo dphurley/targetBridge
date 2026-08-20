@@ -93,6 +93,7 @@ TargetBridge now has a conservative manifest-based addon system. Official manife
 - `Network Link`: local Ethernet/Wi-Fi transport path for the same display pipeline. See [docs/Addons.md#official-addons](docs/Addons.md#official-addons) and [Network Link](docs/Features.md#network-link-experimental).
 - `Audio Relay`: streamed system audio from sender to receiver. See [docs/audio.md](docs/audio.md) and [docs/Addons.md#official-addons](docs/Addons.md#official-addons).
 - `Input Dockstation`: keyboard/mouse relay, master/slave roles, slave switching, and text clipboard sync. See [docs/Addons.md#input-dockstation](docs/Addons.md#input-dockstation) and [Input Dockstation](docs/Features.md#input-dockstation).
+- `Receiver VR` (experimental): view and control the Sender from a headset browser on the same Wi-Fi network, without installing an app on the headset. See [docs/Receiver-VR.md](docs/Receiver-VR.md).
 
 ## Requirements
 
@@ -124,6 +125,7 @@ If you build from source, app outputs go into `build/` folder.
 ## Permissions
 
 - Sender usually needs `Screen Recording`.
+- `Receiver VR` also needs Sender `Accessibility` to apply pointer events from the headset browser.
 - `Input Dockstation` may also require `Accessibility` and `Input Monitoring`, depending on the active role.
 - Receiver may require `Accessibility` or `Input Monitoring` when it participates in input relay.
 - In practice, `Input Dockstation` is a two-sided feature: one Mac captures input, the other injects it, so permissions may be needed on both Sender and Receiver.

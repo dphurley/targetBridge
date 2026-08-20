@@ -20,6 +20,7 @@ The current official manifests bundled with the app are:
 - `Network Link`
 - `Audio Relay`
 - `Input Dockstation`
+- `Receiver VR` (experimental)
 
 Bundled official addon manifests also ship inside the app bundle and are mirrored to:
 
@@ -83,6 +84,29 @@ Current capability identifiers
 - `network-link`
 - `audio-relay`
 - `input-dockstation`
+- `vr-receiver`
+
+Receiver VR
+-----------
+
+`Receiver VR` turns a headset browser on the same Wi-Fi network into a simple
+TargetBridge receiver. It is designed as a no-install experiment for standalone
+headsets, including Quest 1:
+
+1. Stop active display sessions, then enable `Receiver VR` in **Settings > Add-ons**.
+2. Start Receiver VR from its card in Settings.
+3. Open the headset browser and scan the QR code shown by TargetBridge.
+4. Point at the streamed desktop and press to move or click. The page also offers
+   large directional and scroll controls when a browser does not expose a headset
+   joystick to web pages.
+
+The feature needs Screen Recording and Accessibility on the Sender Mac. The
+desktop stream and input stay on the local network and stop immediately when the
+Receiver VR card is stopped or the addon is disabled.
+
+This initial browser receiver has no audio and is not a native VR application.
+Controller and hand-pointer support depend on the headset browser; Quest 1 is a
+test target, not a guaranteed compatibility claim yet. See [Receiver VR](Receiver-VR.md).
 
 Input Dockstation
 -----------------

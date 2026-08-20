@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -109,6 +110,9 @@ struct TBDisplaySenderSettingsView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(service.addons) { addon in
                                 addonCard(addon)
+                            }
+                            if service.vrReceiverAvailable {
+                                vrReceiverCard
                             }
                         }
                     }
@@ -221,6 +225,67 @@ struct TBDisplaySenderSettingsView: View {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    private var vrReceiverCard: some View {
+        SurfaceSubcard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(vrReceiverTitle)
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        Text(vrReceiverDescription)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Text(experimentalTitle)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.yellow)
+                }
+
+                if service.vrReceiverIsRunning {
+                    HStack(alignment: .center, spacing: 14) {
+                        if let qrCode = qrCode(for: service.vrReceiverURL) {
+                            Image(nsImage: qrCode)
+                                .interpolation(.none)
+                                .resizable()
+                                .frame(width: 106, height: 106)
+                                .padding(6)
+                                .background(.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(vrScanHint)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Text(service.vrReceiverURL)
+                                .font(.system(.footnote, design: .monospaced))
+                                .textSelection(.enabled)
+                                .foregroundStyle(.green)
+                            HStack {
+                                Button(vrOpenTitle) { service.openVRReceiverURL() }
+                                    .buttonStyle(.borderedProminent)
+                                Button(vrStopTitle) { service.stopVRReceiver() }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                } else {
+                    Text(vrPermissionHint)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button(vrStartTitle) { service.startVRReceiver() }
+                        .buttonStyle(.borderedProminent)
+                }
+
+                if let error = service.vrReceiverError {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
                 }
             }
         }
@@ -542,6 +607,94 @@ struct TBDisplaySenderSettingsView: View {
         case (.inputDockstation, .german): return "Input Dockstation"
         case (.inputDockstation, .french): return "Station d’accueil des entrées"
         case (.inputDockstation, .chinese): return "输入扩展坞"
+        case (.vrReceiver, .italian): return "Receiver VR"
+        case (.vrReceiver, .english): return "VR Receiver"
+        case (.vrReceiver, .german): return "VR-Empfänger"
+        case (.vrReceiver, .french): return "Récepteur VR"
+        case (.vrReceiver, .chinese): return "VR 接收器"
         }
+    }
+
+    private var vrReceiverTitle: String {
+        switch service.language {
+        case .italian: return "Receiver VR nel browser"
+        case .english: return "Browser VR Receiver"
+        case .german: return "VR-Empfänger im Browser"
+        case .french: return "Récepteur VR dans le navigateur"
+        case .chinese: return "浏览器 VR 接收器"
+        }
+    }
+
+    private var vrReceiverDescription: String {
+        switch service.language {
+        case .italian: return "Apri il link dal browser del visore sulla stessa rete Wi-Fi per visualizzare e controllare questo Mac."
+        case .english: return "Open the link in a headset browser on the same Wi-Fi network to view and control this Mac."
+        case .german: return "Öffne den Link im Browser des Headsets im gleichen WLAN, um diesen Mac anzuzeigen und zu steuern."
+        case .french: return "Ouvrez le lien dans le navigateur du casque sur le même réseau Wi-Fi pour voir et contrôler ce Mac."
+        case .chinese: return "在同一 Wi-Fi 网络上的头显浏览器中打开链接，以查看和控制这台 Mac。"
+        }
+    }
+
+    private var vrPermissionHint: String {
+        switch service.language {
+        case .italian: return "Richiede Registrazione schermo e Accessibilità su questo Mac. Il link appare dopo l’avvio."
+        case .english: return "Requires Screen Recording and Accessibility on this Mac. The link appears after starting."
+        case .german: return "Benötigt Bildschirmaufnahme und Bedienungshilfen auf diesem Mac. Der Link erscheint nach dem Start."
+        case .french: return "Nécessite Enregistrement de l’écran et Accessibilité sur ce Mac. Le lien apparaît après le démarrage."
+        case .chinese: return "需要此 Mac 上的屏幕录制和辅助功能权限。启动后将显示链接。"
+        }
+    }
+
+    private var vrStartTitle: String {
+        switch service.language {
+        case .italian: return "Avvia Receiver VR"
+        case .english: return "Start VR Receiver"
+        case .german: return "VR-Empfänger starten"
+        case .french: return "Démarrer le récepteur VR"
+        case .chinese: return "启动 VR 接收器"
+        }
+    }
+
+    private var vrStopTitle: String {
+        switch service.language {
+        case .italian: return "Ferma"
+        case .english: return "Stop"
+        case .german: return "Stoppen"
+        case .french: return "Arrêter"
+        case .chinese: return "停止"
+        }
+    }
+
+    private var vrOpenTitle: String {
+        switch service.language {
+        case .italian: return "Apri nel browser"
+        case .english: return "Open in browser"
+        case .german: return "Im Browser öffnen"
+        case .french: return "Ouvrir dans le navigateur"
+        case .chinese: return "在浏览器中打开"
+        }
+    }
+
+    private var vrScanHint: String {
+        switch service.language {
+        case .italian: return "Apri il browser del visore e scansiona questo codice."
+        case .english: return "Open the headset browser and scan this code."
+        case .german: return "Öffne den Browser des Headsets und scanne diesen Code."
+        case .french: return "Ouvrez le navigateur du casque et scannez ce code."
+        case .chinese: return "打开头显浏览器并扫描此二维码。"
+        }
+    }
+
+    private func qrCode(for value: String) -> NSImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator"),
+              let data = value.data(using: .utf8)
+        else { return nil }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
+        let representation = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
     }
 }

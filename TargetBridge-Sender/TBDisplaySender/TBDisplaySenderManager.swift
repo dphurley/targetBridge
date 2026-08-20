@@ -107,8 +107,10 @@ final class TBDisplaySenderService: ObservableObject {
     private let receiverDiscovery = TBReceiverDiscovery()
     private let addonStore = TBAddonStore.shared
     private let inputRelayController = TBInputRelayController()
+    private let vrReceiver = TBVRReceiverService()
     private var discoveryCancellable: AnyCancellable?
     private var addonCancellable: AnyCancellable?
+    private var vrReceiverCancellable: AnyCancellable?
     private var activationObserver: NSObjectProtocol?
     private var clipboardTimer: Timer?
     private var lastClipboardChangeCount: Int = NSPasteboard.general.changeCount
@@ -126,6 +128,9 @@ final class TBDisplaySenderService: ObservableObject {
             self.addons = addons
             normalizeAddonState()
             objectWillChange.send()
+        }
+        vrReceiverCancellable = vrReceiver.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
         }
         refreshLocalInterfaces()
         addonStore.refresh()
@@ -190,6 +195,14 @@ final class TBDisplaySenderService: ObservableObject {
         isAddonCapabilityEnabled(.inputDockstation)
     }
 
+    var vrReceiverAvailable: Bool {
+        isAddonCapabilityEnabled(.vrReceiver)
+    }
+
+    var vrReceiverIsRunning: Bool { vrReceiver.isRunning }
+    var vrReceiverURL: String { vrReceiver.browserURL }
+    var vrReceiverError: String? { vrReceiver.errorMessage }
+
     var localInputInjectionTrusted: Bool {
         AXIsProcessTrusted()
     }
@@ -209,6 +222,22 @@ final class TBDisplaySenderService: ObservableObject {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") else {
             return
         }
+        NSWorkspace.shared.open(url)
+    }
+
+    func startVRReceiver() {
+        guard vrReceiverAvailable else { return }
+        vrReceiver.start { [weak self] event in
+            self?.applyVRInput(event)
+        }
+    }
+
+    func stopVRReceiver() {
+        vrReceiver.stop()
+    }
+
+    func openVRReceiverURL() {
+        guard let url = URL(string: vrReceiver.browserURL) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -695,6 +724,7 @@ final class TBDisplaySenderService: ObservableObject {
         let networkLinkEnabled = isAddonCapabilityEnabled(.networkLink)
         let audioEnabled = audioRelayAvailable
         let inputEnabled = inputDockstationAvailable
+        let vrReceiverEnabled = vrReceiverAvailable
 
         for session in sessions {
             session.audioAddonAvailable = audioEnabled
@@ -707,9 +737,58 @@ final class TBDisplaySenderService: ObservableObject {
             }
         }
 
+        if !vrReceiverEnabled {
+            vrReceiver.stop()
+        }
+
         normalizeSessionInterfaces()
         updateInputRelayController()
         sessions.forEach { $0.updateInputControlMode() }
+    }
+
+    private var vrMouseLocation: CGPoint?
+
+    private func applyVRInput(_ event: TBVRRemoteInput) {
+        guard AXIsProcessTrusted() else {
+            vrReceiver.stop()
+            return
+        }
+        let source = CGEventSource(stateID: .hidSystemState)
+        source?.localEventsSuppressionInterval = 0
+        let current = vrMouseLocation ?? CGEvent(source: nil)?.location ?? .zero
+
+        switch event.kind {
+        case "pointer":
+            guard let x = event.x, let y = event.y else { return }
+            let bounds = CGDisplayBounds(CGMainDisplayID())
+            let target = CGPoint(
+                x: bounds.minX + bounds.width * CGFloat(min(max(x, 0), 1)),
+                y: bounds.minY + bounds.height * CGFloat(min(max(y, 0), 1))
+            )
+            vrMouseLocation = target
+            CGWarpMouseCursorPosition(target)
+            CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: target, mouseButton: .left)?.post(tap: .cghidEventTap)
+        case "move":
+            let dx = CGFloat(event.dx ?? 0)
+            let dy = CGFloat(event.dy ?? 0)
+            let target = CGPoint(x: current.x + dx, y: current.y + dy)
+            vrMouseLocation = target
+            CGWarpMouseCursorPosition(target)
+            let mouse = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: target, mouseButton: .left)
+            mouse?.setIntegerValueField(.mouseEventDeltaX, value: Int64(dx))
+            mouse?.setIntegerValueField(.mouseEventDeltaY, value: Int64(dy))
+            mouse?.post(tap: .cghidEventTap)
+        case "button":
+            let isLeft = event.button != "right"
+            let isDown = event.pressed == true
+            let type: CGEventType = isLeft ? (isDown ? .leftMouseDown : .leftMouseUp) : (isDown ? .rightMouseDown : .rightMouseUp)
+            CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: current, mouseButton: isLeft ? .left : .right)?.post(tap: .cghidEventTap)
+        case "scroll":
+            let vertical = Int32(event.dy ?? 0)
+            CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 1, wheel1: vertical, wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
+        default:
+            break
+        }
     }
 
     nonisolated static func restoredAudioEnabled(from persistedValue: Bool, repairPending: Bool) -> Bool {

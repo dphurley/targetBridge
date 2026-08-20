@@ -1,0 +1,13 @@
+{
+  "id": "targetbridge.receiver-vr",
+  "name": "Receiver VR",
+  "version": "0.1",
+  "summary": "View and control this Mac from a WebXR headset on the local network.",
+  "author": "TargetBridge",
+  "minimumSenderVersion": "3.5",
+  "capabilities": [
+    "vr-receiver"
+  ],
+  "experimental": true,
+  "defaultEnabled": false
+}
