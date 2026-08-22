@@ -1615,21 +1615,104 @@ static void tb_receiver_refresh_input_capture(struct app *a) {
     }
 }
 
+/* Geometry of the physical panel the receiver window lives on.
+ *
+ * `panel_*` is the HiDPI backing store in pixels and `mode_*` the logical
+ * desktop in points; on a Retina panel macOS keeps these in a strict 2:1
+ * relationship. The sender needs both: `mode_*` becomes the CGVirtualDisplay
+ * mode and `panel_*` the advertised backing panel it is checked against. */
+struct tb_panel_geometry {
+    uint32_t panel_w;
+    uint32_t panel_h;
+    uint32_t mode_w;
+    uint32_t mode_h;
+    double   width_mm;
+    double   height_mm;
+    int      hidpi;
+};
+
+/* SDL exposes displays by index; CoreGraphics by CGDirectDisplayID. Both use
+ * the same top-left-origin global coordinate space on macOS, so the bounds
+ * origin is a reliable join key. */
+static CGDirectDisplayID tb_cg_display_for_sdl_index(int sdl_index) {
+    SDL_Rect bounds;
+    if (SDL_GetDisplayBounds(sdl_index, &bounds) != 0) return CGMainDisplayID();
+
+    CGDirectDisplayID ids[16];
+    uint32_t count = 0;
+    if (CGGetActiveDisplayList(16, ids, &count) != kCGErrorSuccess) return CGMainDisplayID();
+
+    for (uint32_t i = 0; i < count; i++) {
+        CGRect r = CGDisplayBounds(ids[i]);
+        if ((int)r.origin.x == bounds.x && (int)r.origin.y == bounds.y) return ids[i];
+    }
+    return CGMainDisplayID();
+}
+
+/* Ask macOS what panel we are actually running on, rather than assuming the
+ * 27" 5K iMac this project was originally written for. Deliberately does not
+ * use the SDL window/drawable size: that reports the transient window when
+ * running windowed, which produces a virtual display mode the sender cannot
+ * back. CGDisplayMode is a property of the display itself and stays correct
+ * in both windowed and fullscreen modes. */
+static int tb_probe_panel_geometry(int sdl_display_index, struct tb_panel_geometry *out) {
+    if (!out) return -1;
+
+    CGDirectDisplayID did = tb_cg_display_for_sdl_index(sdl_display_index);
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(did);
+    if (!mode) return -1;
+
+    size_t pt_w = CGDisplayModeGetWidth(mode);
+    size_t pt_h = CGDisplayModeGetHeight(mode);
+    size_t px_w = CGDisplayModeGetPixelWidth(mode);
+    size_t px_h = CGDisplayModeGetPixelHeight(mode);
+    CGDisplayModeRelease(mode);
+
+    if (pt_w == 0 || pt_h == 0 || px_w == 0 || px_h == 0) return -1;
+
+    /* macOS HiDPI is strictly 2x. Anything else (a genuinely non-Retina panel,
+     * or a ratio we do not recognise) is advertised as a 1x display so the
+     * sender does not try to create a HiDPI mode the panel cannot back. */
+    out->hidpi = (px_w == pt_w * 2 && px_h == pt_h * 2) ? 1 : 0;
+    if (!out->hidpi) {
+        px_w = pt_w;
+        px_h = pt_h;
+    }
+
+    out->panel_w = (uint32_t)px_w;
+    out->panel_h = (uint32_t)px_h;
+    out->mode_w  = (uint32_t)pt_w;
+    out->mode_h  = (uint32_t)pt_h;
+
+    CGSize mm = CGDisplayScreenSize(did);
+    out->width_mm  = mm.width;
+    out->height_mm = mm.height;
+    return 0;
+}
+
 static void send_receiver_info(struct app *a) {
     struct tb_display_info info;
     if (tb_disp_get_info(a->disp, &info) < 0) return;
 
-    /* Always advertise the intended iMac target panel, not the transient
-     * SDL window/debug drawable size. Using the drawable here breaks the
-     * sender's virtual display creation path when running windowed or on
-     * scaled desktops because macOS rejects a HiDPI mode larger than the
-     * advertised backing panel. */
-    const uint32_t panel_w = 5120;
-    const uint32_t panel_h = 2880;
-    const uint32_t mode_w = 2560;
-    const uint32_t mode_h = 1440;
-    const uint32_t capture_w = 2560;
-    const uint32_t capture_h = 1440;
+    struct tb_panel_geometry geom;
+    if (tb_probe_panel_geometry(info.display_index, &geom) < 0) {
+        /* Fall back to the historical 5K iMac assumption so a probe failure
+         * degrades to the previous behaviour instead of no display at all. */
+        fprintf(stderr, "[main] panel probe failed; assuming 5K iMac geometry\n");
+        geom.panel_w = 5120; geom.panel_h = 2880;
+        geom.mode_w  = 2560; geom.mode_h  = 1440;
+        geom.width_mm = 596.7; geom.height_mm = 335.7;
+        geom.hidpi = 1;
+    }
+
+    const uint32_t panel_w = geom.panel_w;
+    const uint32_t panel_h = geom.panel_h;
+    const uint32_t mode_w = geom.mode_w;
+    const uint32_t mode_h = geom.mode_h;
+    /* Capturing at the backing store size makes the sender-side capture 1:1
+     * with what the receiver will draw, leaving only the panel-side scale. */
+    const uint32_t capture_w = geom.panel_w;
+    const uint32_t capture_h = geom.panel_h;
 
     char escaped_name[256];
     size_t out = 0;
@@ -1650,15 +1733,19 @@ static void send_receiver_info(struct app *a) {
         sizeof(json),
         "{\"receiverName\":\"%s\",\"panelWidth\":%u,\"panelHeight\":%u,"
         "\"modeWidth\":%u,\"modeHeight\":%u,\"refreshRate\":60,"
-        "\"hiDPI\":true,\"captureWidth\":%u,\"captureHeight\":%u,"
+        "\"hiDPI\":%s,\"captureWidth\":%u,\"captureHeight\":%u,"
+        "\"physicalWidthMM\":%.1f,\"physicalHeightMM\":%.1f,"
         "\"supportsHEVCDecode\":%s,\"supportsRawNV12\":true,\"inputMonitoringTrusted\":%s,\"accessibilityTrusted\":%s}",
         escaped_name,
         panel_w,
         panel_h,
         mode_w,
         mode_h,
+        geom.hidpi ? "true" : "false",
         capture_w,
         capture_h,
+        geom.width_mm,
+        geom.height_mm,
         tb_dec_supports_hevc_hwdecode() ? "true" : "false",
         tb_receiver_input_monitoring_trusted() ? "true" : "false",
         tb_receiver_accessibility_trusted() ? "true" : "false"
@@ -1675,8 +1762,10 @@ static void send_receiver_info(struct app *a) {
 
     if (send_all(a->client_fd, pkt, packet_len) == 0) {
         fprintf(stderr,
-                "[main] sent display profile: panel=%ux%u mode=%ux%u hidpi name=%s\n",
-                panel_w, panel_h, mode_w, mode_h, info.name);
+                "[main] sent display profile: panel=%ux%u mode=%ux%u %s %.1fx%.1fmm name=%s\n",
+                panel_w, panel_h, mode_w, mode_h,
+                geom.hidpi ? "hidpi" : "1x",
+                geom.width_mm, geom.height_mm, info.name);
     }
     free(pkt);
 }

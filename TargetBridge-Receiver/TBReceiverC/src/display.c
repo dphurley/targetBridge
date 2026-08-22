@@ -1320,6 +1320,7 @@ int tb_disp_get_info(struct tb_display *d, struct tb_display_info *info) {
 
     int display_index = SDL_GetWindowDisplayIndex(d->win);
     if (display_index < 0) display_index = 0;
+    info->display_index = display_index;
 
     SDL_DisplayMode mode;
     if (SDL_GetCurrentDisplayMode(display_index, &mode) == 0) {

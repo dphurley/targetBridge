@@ -40,6 +40,10 @@ struct TBMonitorDisplayProfile: Codable {
     var hiDPI: Bool
     var captureWidth: Int
     var captureHeight: Int
+    /// Physical panel size reported by the receiver. Optional: receivers older
+    /// than the dynamic-geometry change do not send it.
+    var physicalWidthMM: Double?
+    var physicalHeightMM: Double?
     var supportsHEVCDecode: Bool?
     var supportsRawNV12: Bool?
     var inputMonitoringTrusted: Bool?
