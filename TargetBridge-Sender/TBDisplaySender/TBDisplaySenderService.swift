@@ -10,6 +10,13 @@ import Network
 @preconcurrency import ScreenCaptureKit
 import VideoToolbox
 
+struct TBCaptureSize: Equatable {
+    let width: Int
+    let height: Int
+
+    var megapixels: Double { Double(width * height) / 1_000_000 }
+}
+
 enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
     case standard1440p
     case smooth1440p60
@@ -17,8 +24,15 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
     case crisp2160p60
     case native5k
     case native5k60Experimental
+    /// Streams at whatever backing store the receiver reported, so nothing is
+    /// resampled between the sender's framebuffer and the receiver's drawable.
+    case matchReceiver
 
     var id: String { rawValue }
+
+    /// Fallback used before the receiver profile handshake completes, and if a
+    /// receiver reports nonsense geometry.
+    static let unresolvedCaptureSize = TBCaptureSize(width: 2560, height: 1440)
 
     var title: String {
         switch self {
@@ -34,6 +48,8 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
             return "5K"
         case .native5k60Experimental:
             return "5K 60 Experimental"
+        case .matchReceiver:
+            return "Native"
         }
     }
 
@@ -51,36 +67,47 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
             return "5120 × 2880 @ 48"
         case .native5k60Experimental:
             return "5120 × 2880 @ 60"
+        case .matchReceiver:
+            return "Matches receiver"
         }
     }
 
-    var width: Int {
+    /// Stream dimensions baked into the preset, or nil for `.matchReceiver`,
+    /// which takes them from the receiver profile at connect time.
+    var fixedSize: TBCaptureSize? {
         switch self {
         case .standard1440p, .smooth1440p60:
-            return 2560
+            return TBCaptureSize(width: 2560, height: 1440)
         case .smooth1800p60:
-            return 3200
+            return TBCaptureSize(width: 3200, height: 1800)
         case .crisp2160p60:
-            return 3840
+            return TBCaptureSize(width: 3840, height: 2160)
         case .native5k, .native5k60Experimental:
-            return 5120
+            return TBCaptureSize(width: 5120, height: 2880)
+        case .matchReceiver:
+            return nil
         }
     }
 
-    var height: Int {
-        switch self {
-        case .standard1440p, .smooth1440p60:
-            return 1440
-        case .smooth1800p60:
-            return 1800
-        case .crisp2160p60:
-            return 2160
-        case .native5k, .native5k60Experimental:
-            return 2880
+    /// Dimensions to capture, encode and advertise for this preset.
+    ///
+    /// Fixed presets ignore the profile. `.matchReceiver` uses the receiver's
+    /// reported backing store so ScreenCaptureKit captures the sender's
+    /// framebuffer 1:1 and the receiver draws it 1:1, leaving only the
+    /// panel-side scale macOS would perform natively anyway.
+    func captureSize(for profile: TBMonitorDisplayProfile?) -> TBCaptureSize {
+        if let fixedSize { return fixedSize }
+        guard let profile, profile.captureWidth > 1, profile.captureHeight > 1 else {
+            return Self.unresolvedCaptureSize
         }
+        // 4:2:0 chroma subsampling requires even dimensions in both axes.
+        return TBCaptureSize(
+            width: profile.captureWidth & ~1,
+            height: profile.captureHeight & ~1
+        )
     }
 
-    var averageBitRate: Int {
+    func averageBitRate(for size: TBCaptureSize) -> Int {
         switch self {
         case .standard1440p:
             return 36_000_000
@@ -94,6 +121,11 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
             return 120_000_000
         case .native5k60Experimental:
             return 150_000_000
+        case .matchReceiver:
+            // The fixed presets sit around 13 Mbps per megapixel at 60 fps;
+            // follow that curve rather than inventing a number, and clamp so a
+            // very small or very large receiver still lands somewhere sane.
+            return min(240_000_000, max(36_000_000, Int(size.megapixels * 13_000_000)))
         }
     }
 
@@ -101,7 +133,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         switch self {
         case .standard1440p, .smooth1440p60, .smooth1800p60:
             return "H.264"
-        case .crisp2160p60, .native5k, .native5k60Experimental:
+        case .crisp2160p60, .native5k, .native5k60Experimental, .matchReceiver:
             return "HEVC"
         }
     }
@@ -110,7 +142,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         switch self {
         case .standard1440p, .smooth1440p60, .smooth1800p60:
             return kCMVideoCodecType_H264
-        case .crisp2160p60, .native5k, .native5k60Experimental:
+        case .crisp2160p60, .native5k, .native5k60Experimental, .matchReceiver:
             return kCMVideoCodecType_HEVC
         }
     }
@@ -134,7 +166,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
             return 60
         case .native5k:
             return 48
-        case .native5k60Experimental:
+        case .native5k60Experimental, .matchReceiver:
             return 60
         }
     }
@@ -151,7 +183,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
             return 60
         case .native5k:
             return 48
-        case .native5k60Experimental:
+        case .native5k60Experimental, .matchReceiver:
             return 60
         }
     }
@@ -164,7 +196,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
             return 1
         case .smooth1800p60, .crisp2160p60:
             return 1
-        case .native5k, .native5k60Experimental:
+        case .native5k, .native5k60Experimental, .matchReceiver:
             return 1
         }
     }
@@ -173,7 +205,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         switch self {
         case .standard1440p:
             return false
-        case .smooth1440p60, .smooth1800p60, .crisp2160p60, .native5k, .native5k60Experimental:
+        case .smooth1440p60, .smooth1800p60, .crisp2160p60, .native5k, .native5k60Experimental, .matchReceiver:
             return true
         }
     }
@@ -189,7 +221,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         switch self {
         case .standard1440p:
             return 1
-        case .smooth1440p60, .smooth1800p60, .crisp2160p60, .native5k, .native5k60Experimental:
+        case .smooth1440p60, .smooth1800p60, .crisp2160p60, .native5k, .native5k60Experimental, .matchReceiver:
             return 0
         }
     }
@@ -198,7 +230,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         switch self {
         case .standard1440p:
             return false
-        case .smooth1440p60, .smooth1800p60, .crisp2160p60, .native5k, .native5k60Experimental:
+        case .smooth1440p60, .smooth1800p60, .crisp2160p60, .native5k, .native5k60Experimental, .matchReceiver:
             return true
         }
     }
@@ -214,7 +246,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         switch self {
         case .standard1440p, .smooth1440p60, .smooth1800p60:
             return .nominal
-        case .crisp2160p60, .native5k, .native5k60Experimental:
+        case .crisp2160p60, .native5k, .native5k60Experimental, .matchReceiver:
             return .best
         }
     }
@@ -229,7 +261,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
             return 60
         case .native5k:
             return 48
-        case .native5k60Experimental:
+        case .native5k60Experimental, .matchReceiver:
             return 60
         }
     }
@@ -238,15 +270,19 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
     /// resolution. macOS HiDPI is strictly 2x, so a (w/2, h/2) mode backs onto a
     /// (w, h) framebuffer, which ScreenCaptureKit then captures 1:1.
     ///
-    /// Costs screen real estate: the desktop reports "looks like w/2 x h/2" rather
-    /// than the receiver's default 2560 x 1440.
-    var renderMatchedDisplayMode: TBVirtualDisplayModeSize {
-        TBVirtualDisplayModeSize(width: width / 2, height: height / 2)
+    /// Costs screen real estate under the fixed presets: the desktop reports
+    /// "looks like w/2 x h/2" rather than the receiver's own logical size. Under
+    /// `.matchReceiver` it is a no-op, because the stream is already the
+    /// receiver's backing store and w/2 x h/2 is its native point size.
+    func renderMatchedDisplayMode(for profile: TBMonitorDisplayProfile?) -> TBVirtualDisplayModeSize {
+        let size = captureSize(for: profile)
+        return TBVirtualDisplayModeSize(width: size.width / 2, height: size.height / 2)
     }
 
     /// Logical desktop size the user ends up with under render matching.
-    var renderMatchedDesktopDescription: String {
-        "\(width / 2) × \(height / 2)"
+    func renderMatchedDesktopDescription(for profile: TBMonitorDisplayProfile?) -> String {
+        let size = captureSize(for: profile)
+        return "\(size.width / 2) × \(size.height / 2)"
     }
 }
 
@@ -308,7 +344,7 @@ private final class TBDirectDisplayStreamCapture {
         self.queue = queue
     }
 
-    func start(displayID: CGDirectDisplayID, preset: TBDisplayCapturePreset, showCursor: Bool) -> Bool {
+    func start(displayID: CGDirectDisplayID, preset: TBDisplayCapturePreset, captureSize: TBCaptureSize, showCursor: Bool) -> Bool {
         let properties: NSDictionary = [
             CGDisplayStream.showCursor: showCursor,
             CGDisplayStream.queueDepth: preset.queueDepth,
@@ -317,8 +353,8 @@ private final class TBDirectDisplayStreamCapture {
 
         let displayStream = CGDisplayStream(
             dispatchQueueDisplay: displayID,
-            outputWidth: preset.width,
-            outputHeight: preset.height,
+            outputWidth: captureSize.width,
+            outputHeight: captureSize.height,
             pixelFormat: Int32(kCVPixelFormatType_32BGRA),
             properties: properties,
             queue: queue
@@ -371,6 +407,9 @@ private final class TBVideoPipeline: @unchecked Sendable {
     let queue = DispatchQueue(label: "fd.tbmonitor.sender.pipeline", qos: .userInteractive)
 
     private let preset: TBDisplayCapturePreset
+    /// Resolved once at construction: `.matchReceiver` depends on the receiver
+    /// profile, which the pipeline itself has no access to.
+    private let captureSize: TBCaptureSize
     private let codecType: CMVideoCodecType
     private let connection: NWConnection
     private let displayName: String
@@ -394,6 +433,7 @@ private final class TBVideoPipeline: @unchecked Sendable {
     private var _lastCaptureFrameAt = Date()
 
     init(preset: TBDisplayCapturePreset,
+         captureSize: TBCaptureSize,
          codecType: CMVideoCodecType,
          connection: NWConnection,
          displayName: String,
@@ -402,6 +442,7 @@ private final class TBVideoPipeline: @unchecked Sendable {
          ackAlreadySent: Bool,
          onFirstFrame: @escaping @Sendable () -> Void) {
         self.preset = preset
+        self.captureSize = captureSize
         self.codecType = codecType
         self.connection = connection
         self.displayName = displayName
@@ -488,8 +529,8 @@ private final class TBVideoPipeline: @unchecked Sendable {
         var session: VTCompressionSession?
         guard VTCompressionSessionCreate(
             allocator: nil,
-            width: Int32(preset.width),
-            height: Int32(preset.height),
+            width: Int32(captureSize.width),
+            height: Int32(captureSize.height),
             codecType: codecType,
             encoderSpecification: spec,
             imageBufferAttributes: nil,
@@ -514,7 +555,7 @@ private final class TBVideoPipeline: @unchecked Sendable {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: NSNumber(value: preset.maxKeyFrameInterval))
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: NSNumber(value: preset.maxKeyFrameIntervalDuration))
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: NSNumber(value: preset.maxFrameDelayCount))
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: preset.averageBitRate))
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: preset.averageBitRate(for: captureSize)))
         if preset.prioritizeSpeed {
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         }
@@ -562,8 +603,8 @@ private final class TBVideoPipeline: @unchecked Sendable {
 
         let attrs: NSDictionary = [
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey: preset.width,
-            kCVPixelBufferHeightKey: preset.height,
+            kCVPixelBufferWidthKey: captureSize.width,
+            kCVPixelBufferHeightKey: captureSize.height,
             kCVPixelBufferIOSurfacePropertiesKey: NSDictionary()
         ]
         var unmanagedPixelBuffer: Unmanaged<CVPixelBuffer>?
@@ -1086,6 +1127,19 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var session = ReceiverBackedVirtualDisplaySession()
     private let audioConverter = SBAudioConverter()
     private var activeProfile: TBMonitorDisplayProfile?
+
+    /// Stream dimensions for the current preset, resolved against the receiver
+    /// profile once the handshake has delivered one. Before that `.matchReceiver`
+    /// falls back to `TBDisplayCapturePreset.unresolvedCaptureSize`; every site
+    /// that configures capture or encoding runs after the profile has arrived.
+    var resolvedCaptureSize: TBCaptureSize {
+        capturePreset.captureSize(for: activeProfile)
+    }
+
+    /// Logical desktop size under render matching, for the settings UI.
+    var renderMatchedDesktopText: String {
+        capturePreset.renderMatchedDesktopDescription(for: activeProfile)
+    }
     private var activeCodecType: CMVideoCodecType?
     private var activeCodecName: String?
 
@@ -1235,7 +1289,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 return kCMVideoCodecType_HEVC
             }
             return kCMVideoCodecType_H264
-        case .crisp2160p60, .native5k, .native5k60Experimental:
+        case .crisp2160p60, .native5k, .native5k60Experimental, .matchReceiver:
             return preset.codecType
         }
     }
@@ -1676,8 +1730,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 uiLanguage: language.fileStem,
                 capturePreset: preset.title,
                 captureSource: captureSource.title(language),
-                captureWidth: preset.width,
-                captureHeight: preset.height,
+                captureWidth: resolvedCaptureSize.width,
+                captureHeight: resolvedCaptureSize.height,
                 codec: codecName(for: helloCodecType)
             )
         ) else { return }
@@ -2196,14 +2250,15 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             self.baselineDisplayIDs = await self.fetchShareableDisplayIDs()
             let receiverKey = self.extendedDisplayIdentityKey(for: profile)
             let modeOverride: TBVirtualDisplayModeSize? = (self.matchRenderToStream && self.captureSource == .extendedDesktop)
-                ? self.capturePreset.renderMatchedDisplayMode
+                ? self.capturePreset.renderMatchedDisplayMode(for: profile)
                 : nil
             if let modeOverride {
+                let streamSize = self.capturePreset.captureSize(for: profile)
                 NSLog(
                     "TargetBridge: render matching on, virtual display mode %dx%d (backing %dx%d) for %dx%d stream",
                     modeOverride.width, modeOverride.height,
                     modeOverride.backingWidth, modeOverride.backingHeight,
-                    self.capturePreset.width, self.capturePreset.height
+                    streamSize.width, streamSize.height
                 )
             }
             guard self.session.create(
@@ -2262,6 +2317,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private func startCapture(for profile: TBMonitorDisplayProfile) async -> Bool {
         do {
             let preset = capturePreset
+            let captureSize = resolvedCaptureSize
             let usesRawNV12 = rawNV12Enabled(for: profile)
             let codecType = resolvedCodecType(for: preset, profile: profile)
             let codecName = usesRawNV12 ? "NV12 RAW" : codecName(for: codecType)
@@ -2275,6 +2331,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             // (the pickers are disabled while streaming), so we capture them once.
             let pipeline = TBVideoPipeline(
                 preset: preset,
+                captureSize: captureSize,
                 codecType: codecType,
                 connection: connection,
                 displayName: session.displayName,
@@ -2307,8 +2364,8 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
             }
 
             let configuration = SCStreamConfiguration()
-            configuration.width = preset.width
-            configuration.height = preset.height
+            configuration.width = captureSize.width
+            configuration.height = captureSize.height
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: Int32(preset.expectedFrameRate))
             configuration.queueDepth = preset.queueDepth
             configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
@@ -2390,7 +2447,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         // Deliver frames straight onto the pipeline's own queue — the handler
         // runs there, so encode happens off the main thread with no extra hop.
         let directCapture = TBDirectDisplayStreamCapture(pipeline: pipeline, queue: pipeline.queue)
-        guard directCapture.start(displayID: displayID, preset: preset, showCursor: !largeCursor) else {
+        guard directCapture.start(displayID: displayID, preset: preset, captureSize: resolvedCaptureSize, showCursor: !largeCursor) else {
             return false
         }
 
@@ -2726,11 +2783,12 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private func sendHiddenCursorPacketIfNeeded() {
         guard isConnected else { return }
 
+        let size = resolvedCaptureSize
         let cursor = TBMonitorCursor(
             x: 0,
             y: 0,
-            width: capturePreset.width,
-            height: capturePreset.height,
+            width: size.width,
+            height: size.height,
             visible: false,
             type: 0
         )
@@ -2805,13 +2863,14 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         let localY = point.y - bounds.origin.y
         let visible = localX >= 0 && localY >= 0 && localX <= bounds.width && localY <= bounds.height
 
-        let scaledX = Int((max(0, min(bounds.width, localX)) / bounds.width) * Double(capturePreset.width))
-        let scaledY = Int((max(0, min(bounds.height, localY)) / bounds.height) * Double(capturePreset.height))
+        let size = resolvedCaptureSize
+        let scaledX = Int((max(0, min(bounds.width, localX)) / bounds.width) * Double(size.width))
+        let scaledY = Int((max(0, min(bounds.height, localY)) / bounds.height) * Double(size.height))
         let cursor = TBMonitorCursor(
             x: scaledX,
             y: scaledY,
-            width: capturePreset.width,
-            height: capturePreset.height,
+            width: size.width,
+            height: size.height,
             visible: visible,
             type: getCurrentCursorType()
         )

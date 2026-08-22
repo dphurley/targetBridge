@@ -1053,7 +1053,7 @@ private struct TBDisplaySenderSessionSettingsSheet: View {
     }
 
     private var renderMatchingDetails: String {
-        let desktop = session.capturePreset.renderMatchedDesktopDescription
+        let desktop = session.renderMatchedDesktopText
         switch service.language {
         case .italian: return "Dimensiona il display virtuale sul profilo dello stream: nessun ridimensionamento in cattura. Il desktop appare come \(desktop) HiDPI."
         case .english: return "Sizes the virtual display to the stream profile so capture is 1:1 — no rescale before encoding. Desktop looks like \(desktop) HiDPI."
