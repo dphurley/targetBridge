@@ -18,6 +18,7 @@
 #include "display.h"
 #include "proto.h"
 #include "tb_gesture_bridge.h"
+#include "tb_display_tweaks.h"
 #include "tb_i18n.h"
 
 #include <SDL.h>
@@ -64,6 +65,13 @@ struct app {
     uint64_t last_fps_tick_ms;
     uint64_t last_fps_count;
     uint64_t last_ip_check_ms;
+    /* Last display-tweak state reported to the sender, so changes made on this
+     * Mac (Control Center, System Settings) propagate back and the sender's
+     * toggles stay truthful. -1 = nothing sent yet. */
+    int      reported_night_shift;
+    int      reported_true_tone;
+    uint64_t last_tweak_poll_ms;
+
     uint64_t last_recv_ms;      /* idle watchdog: last time the sender sent anything */
     int      close_requested;
     int      have_video_frame;
@@ -74,7 +82,10 @@ struct app {
 
     char     ip_text[64];
     char     tb_ip_text[64];
+    char     usb_ip_text[64];
     char     net_ip_text[64];
+    char     ethernet_ip_text[64];
+    char     wifi_ip_text[64];
     char     display_host[128]; /* short hostname (or hostname+IP), cached at startup */
     char     status_text[128];
     char     sender_text[128];
@@ -191,6 +202,7 @@ static void tb_receiver_set_clipboard_text(const char *text);
 static int tb_receiver_get_clipboard_text(char *dest, size_t size);
 static void tb_receiver_send_clipboard_if_changed(struct app *a);
 static void write_be32(uint8_t *dst, uint32_t value);
+static void tb_receiver_send_display_tweaks_if_changed(struct app *a);
 
 static int tb_receiver_is_valid_language_pref(const char *language_pref) {
     return language_pref &&
@@ -588,8 +600,17 @@ static void bonjour_update(struct app *a, uint16_t port) {
     if (a->tb_ip_text[0] != '\0') {
         TXTRecordSetValue(&txt, "tbIP", (uint8_t)strlen(a->tb_ip_text), a->tb_ip_text);
     }
+    if (a->usb_ip_text[0] != '\0') {
+        TXTRecordSetValue(&txt, "usbIP", (uint8_t)strlen(a->usb_ip_text), a->usb_ip_text);
+    }
     if (a->net_ip_text[0] != '\0') {
         TXTRecordSetValue(&txt, "netIP", (uint8_t)strlen(a->net_ip_text), a->net_ip_text);
+    }
+    if (a->ethernet_ip_text[0] != '\0') {
+        TXTRecordSetValue(&txt, "ethernetIP", (uint8_t)strlen(a->ethernet_ip_text), a->ethernet_ip_text);
+    }
+    if (a->wifi_ip_text[0] != '\0') {
+        TXTRecordSetValue(&txt, "wifiIP", (uint8_t)strlen(a->wifi_ip_text), a->wifi_ip_text);
     }
     TXTRecordSetValue(&txt, "panel", (uint8_t)strlen(a->panel_text), a->panel_text);
     TXTRecordSetValue(&txt, "version", (uint8_t)strlen(TB_RECEIVER_VERSION), TB_RECEIVER_VERSION);
@@ -1105,6 +1126,19 @@ static void on_packet(uint8_t type, const uint8_t *payload, size_t len, void *ud
             tb_disp_set_brightness(a->disp, level);
         }
         break;
+    case TB_PKT_DISPLAY_TWEAKS:
+        {
+            /* Absent fields are left alone rather than defaulted, so the sender
+             * can change one without disturbing the other. */
+            int night = 0, tone = 0;
+            if (extract_json_bool_field(payload, len, "\"nightShift\"", &night)) {
+                tb_night_shift_set(night);
+            }
+            if (extract_json_bool_field(payload, len, "\"trueTone\"", &tone)) {
+                tb_true_tone_set(tone);
+            }
+        }
+        break;
     case TB_PKT_CLIPBOARD:
         {
             char text[4096];
@@ -1265,6 +1299,41 @@ static void tb_receiver_send_input_event(struct app *a,
     (void)send_all(a->client_fd, pkt, 5 + (size_t)len);
 }
 
+static void tb_receiver_send_input_button_event(struct app *a,
+                                                const char *kind,
+                                                int click_count) {
+    if (!a || a->client_fd < 0) return;
+    if (strcmp(a->input_control_mode, "receiverMaster") != 0) return;
+
+    if (click_count < 1) click_count = 1;
+    if (click_count > 3) click_count = 3;
+
+    char json[128];
+    int len = snprintf(json, sizeof(json),
+                       "{\"kind\":\"%s\",\"clickCount\":%d}",
+                       kind ? kind : "",
+                       click_count);
+    if (len <= 0 || (size_t)len >= sizeof(json)) return;
+
+    uint8_t pkt[4 + 1 + sizeof(json)];
+    write_be32(pkt, (uint32_t)(1 + len));
+    pkt[4] = TB_PKT_INPUT_EVENT;
+    memcpy(pkt + 5, json, (size_t)len);
+    a->input_events_sent += 1;
+    if (tb_should_log_input_event(a->input_events_sent)) {
+        tb_receiver_input_log("[input][receiver->sender] send #%llu kind=%s dx=%d dy=%d sx=%d sy=%d key=%u mode=%s",
+                              (unsigned long long)a->input_events_sent,
+                              kind ? kind : "?",
+                              0,
+                              0,
+                              0,
+                              0,
+                              0,
+                              a->input_control_mode);
+    }
+    (void)send_all(a->client_fd, pkt, 5 + (size_t)len);
+}
+
 static void tb_receiver_send_target_switch(struct app *a, int direction) {
     tb_receiver_send_input_event(a,
                                  direction < 0 ? "switchPrevTarget" : "switchNextTarget",
@@ -1375,27 +1444,45 @@ static CGEventRef tb_receiver_input_tap_callback(CGEventTapProxy proxy,
         break;
     }
     case kCGEventLeftMouseDown:
-        tb_receiver_send_input_event(a, "leftDown", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        tb_receiver_send_input_button_event(
+            a,
+            "leftDown",
+            (int)CGEventGetIntegerValueField(event, kCGMouseEventClickState));
         should_consume = a->input_tap_consumes_events;
         break;
     case kCGEventLeftMouseUp:
-        tb_receiver_send_input_event(a, "leftUp", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        tb_receiver_send_input_button_event(
+            a,
+            "leftUp",
+            (int)CGEventGetIntegerValueField(event, kCGMouseEventClickState));
         should_consume = a->input_tap_consumes_events;
         break;
     case kCGEventRightMouseDown:
-        tb_receiver_send_input_event(a, "rightDown", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        tb_receiver_send_input_button_event(
+            a,
+            "rightDown",
+            (int)CGEventGetIntegerValueField(event, kCGMouseEventClickState));
         should_consume = a->input_tap_consumes_events;
         break;
     case kCGEventRightMouseUp:
-        tb_receiver_send_input_event(a, "rightUp", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        tb_receiver_send_input_button_event(
+            a,
+            "rightUp",
+            (int)CGEventGetIntegerValueField(event, kCGMouseEventClickState));
         should_consume = a->input_tap_consumes_events;
         break;
     case kCGEventOtherMouseDown:
-        tb_receiver_send_input_event(a, "otherDown", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        tb_receiver_send_input_button_event(
+            a,
+            "otherDown",
+            (int)CGEventGetIntegerValueField(event, kCGMouseEventClickState));
         should_consume = a->input_tap_consumes_events;
         break;
     case kCGEventOtherMouseUp:
-        tb_receiver_send_input_event(a, "otherUp", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        tb_receiver_send_input_button_event(
+            a,
+            "otherUp",
+            (int)CGEventGetIntegerValueField(event, kCGMouseEventClickState));
         should_consume = a->input_tap_consumes_events;
         break;
     case kCGEventScrollWheel: {
@@ -1615,6 +1702,33 @@ static void tb_receiver_refresh_input_capture(struct app *a) {
     }
 }
 
+
+/* Report Night Shift / True Tone back to the sender when they change, so its
+ * menu reflects the panel's real state rather than only what it last asked for. */
+static void tb_receiver_send_display_tweaks_if_changed(struct app *a) {
+    if (a->client_fd < 0) return;
+
+    const int night = tb_night_shift_supported() ? tb_night_shift_enabled() : 0;
+    const int tone  = tb_true_tone_supported() ? tb_true_tone_enabled() : 0;
+    if (night == a->reported_night_shift && tone == a->reported_true_tone) return;
+
+    a->reported_night_shift = night;
+    a->reported_true_tone = tone;
+
+    char json[192];
+    int len = snprintf(json, sizeof(json),
+                       "{\"nightShift\":%s,\"trueTone\":%s}",
+                       night ? "true" : "false",
+                       tone ? "true" : "false");
+    if (len <= 0 || (size_t)len >= sizeof(json)) return;
+
+    uint8_t pkt[4 + 1 + sizeof(json)];
+    write_be32(pkt, (uint32_t)(1 + len));
+    pkt[4] = TB_PKT_DISPLAY_TWEAKS;
+    memcpy(pkt + 5, json, (size_t)len);
+    (void)send_all(a->client_fd, pkt, 5 + (size_t)len);
+}
+
 /* Geometry of the physical panel the receiver window lives on.
  *
  * `panel_*` is the HiDPI backing store in pixels and `mode_*` the logical
@@ -1754,7 +1868,7 @@ static void send_receiver_info(struct app *a) {
     }
     escaped_name[out] = '\0';
 
-    char json[768];
+    char json[1024];
     int json_len = snprintf(
         json,
         sizeof(json),
@@ -1762,7 +1876,8 @@ static void send_receiver_info(struct app *a) {
         "\"modeWidth\":%u,\"modeHeight\":%u,\"refreshRate\":60,"
         "\"hiDPI\":%s,\"captureWidth\":%u,\"captureHeight\":%u,"
         "\"physicalWidthMM\":%.1f,\"physicalHeightMM\":%.1f,"
-        "\"supportsHEVCDecode\":%s,\"supportsRawNV12\":true,\"inputMonitoringTrusted\":%s,\"accessibilityTrusted\":%s}",
+        "\"supportsHEVCDecode\":%s,\"supportsRawNV12\":true,\"inputMonitoringTrusted\":%s,\"accessibilityTrusted\":%s,"
+        "\"supportsNightShift\":%s,\"supportsTrueTone\":%s}",
         escaped_name,
         panel_w,
         panel_h,
@@ -1775,8 +1890,9 @@ static void send_receiver_info(struct app *a) {
         geom.height_mm,
         tb_dec_supports_hevc_hwdecode() ? "true" : "false",
         tb_receiver_input_monitoring_trusted() ? "true" : "false",
-        tb_receiver_accessibility_trusted() ? "true" : "false"
-    );
+        tb_receiver_accessibility_trusted() ? "true" : "false",
+        tb_night_shift_supported() ? "true" : "false",
+        tb_true_tone_supported() ? "true" : "false");
     if (json_len <= 0 || (size_t)json_len >= sizeof(json)) return;
 
     const size_t packet_len = 4 + 1 + (size_t)json_len;
@@ -1870,16 +1986,30 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     char tb_ip[64] = {0};
+    char usb_ip[64] = {0};
     char net_ip[64] = {0};
+    char ethernet_ip[64] = {0};
+    char wifi_ip[64] = {0};
     if (tb_net_get_tb_ip(tb_ip, sizeof(tb_ip)) == 0) {
         printf("TBReceiver: Thunderbolt Bridge IP = %s\n", tb_ip);
     } else {
         printf("TBReceiver: warning, no bridge IP detected (169.254.x.x)\n");
     }
+    if (tb_net_get_link_local_ip(usb_ip, sizeof(usb_ip)) == 0) {
+        printf("TBReceiver: Direct USB-NCM IP = %s\n", usb_ip);
+    } else {
+        printf("TBReceiver: warning, no direct USB-NCM/link-local IP detected\n");
+    }
     if (tb_net_get_lan_ip(net_ip, sizeof(net_ip)) == 0) {
         printf("TBReceiver: Local network IP = %s\n", net_ip);
     } else {
         printf("TBReceiver: warning, no LAN IP detected (RFC1918 IPv4)\n");
+    }
+    if (tb_net_get_ethernet_ip(ethernet_ip, sizeof(ethernet_ip)) == 0) {
+        printf("TBReceiver: Ethernet IP = %s\n", ethernet_ip);
+    }
+    if (tb_net_get_wifi_ip(wifi_ip, sizeof(wifi_ip)) == 0) {
+        printf("TBReceiver: Wi-Fi IP = %s\n", wifi_ip);
     }
     printf("TBReceiver: listening on TCP port %d\n", TB_PORT);
 
@@ -1895,14 +2025,21 @@ int main(int argc, char **argv) {
         snprintf(a.bonjour_name, sizeof(a.bonjour_name), "TargetBridge %s", host);
     }
     snprintf(a.tb_ip_text, sizeof(a.tb_ip_text), "%s", tb_ip);
+    snprintf(a.usb_ip_text, sizeof(a.usb_ip_text), "%s", usb_ip);
     snprintf(a.net_ip_text, sizeof(a.net_ip_text), "%s", net_ip);
-    snprintf(a.ip_text, sizeof(a.ip_text), "%s", tb_ip[0] ? tb_ip : (net_ip[0] ? net_ip : tb_i18n_get("receiver.network.not_detected")));
+    snprintf(a.ethernet_ip_text, sizeof(a.ethernet_ip_text), "%s", ethernet_ip);
+    snprintf(a.wifi_ip_text, sizeof(a.wifi_ip_text), "%s", wifi_ip);
+    snprintf(a.ip_text, sizeof(a.ip_text), "%s",
+             tb_ip[0] ? tb_ip
+                      : (usb_ip[0] ? usb_ip
+                                   : (net_ip[0] ? net_ip : tb_i18n_get("receiver.network.not_detected"))));
     snprintf(a.language_pref, sizeof(a.language_pref), "%s", startup_language_pref);
     snprintf(a.input_control_mode, sizeof(a.input_control_mode), "%s", "off");
     a.last_input_monitoring_trusted = -1;
     a.last_accessibility_trusted = -1;
     tb_refresh_idle_localized_strings(&a);
-    build_display_host(a.display_host, sizeof(a.display_host), a.ip_text, tb_ip[0] || net_ip[0]);
+    build_display_host(a.display_host, sizeof(a.display_host), a.ip_text,
+                       tb_ip[0] || usb_ip[0] || net_ip[0]);
     tb_receiver_apply_language_preference(&a);
     tb_gesture_bridge_install(tb_receiver_space_switch_callback, &a);
     tb_gesture_bridge_set_active(0);
@@ -1961,27 +2098,50 @@ int main(int argc, char **argv) {
 
         if (t - a.last_ip_check_ms >= 1000) {
             char refreshed_tb_ip[64] = {0};
+            char refreshed_usb_ip[64] = {0};
             char refreshed_net_ip[64] = {0};
+            char refreshed_ethernet_ip[64] = {0};
+            char refreshed_wifi_ip[64] = {0};
             a.last_ip_check_ms = t;
             (void)tb_net_get_tb_ip(refreshed_tb_ip, sizeof(refreshed_tb_ip));
+            (void)tb_net_get_link_local_ip(refreshed_usb_ip, sizeof(refreshed_usb_ip));
             (void)tb_net_get_lan_ip(refreshed_net_ip, sizeof(refreshed_net_ip));
+            (void)tb_net_get_ethernet_ip(refreshed_ethernet_ip, sizeof(refreshed_ethernet_ip));
+            (void)tb_net_get_wifi_ip(refreshed_wifi_ip, sizeof(refreshed_wifi_ip));
 
-            const int have_refreshed_ip = refreshed_tb_ip[0] || refreshed_net_ip[0];
+            const int have_refreshed_ip =
+                refreshed_tb_ip[0] || refreshed_usb_ip[0] || refreshed_net_ip[0];
             const char *preferred_ip = refreshed_tb_ip[0] ? refreshed_tb_ip
-                                     : (refreshed_net_ip[0] ? refreshed_net_ip
-                                     : tb_i18n_get("receiver.network.not_detected"));
+                                     : (refreshed_usb_ip[0] ? refreshed_usb_ip
+                                      : (refreshed_net_ip[0] ? refreshed_net_ip
+                                      : tb_i18n_get("receiver.network.not_detected")));
             if (strcmp(a.tb_ip_text, refreshed_tb_ip) != 0 ||
+                strcmp(a.usb_ip_text, refreshed_usb_ip) != 0 ||
                 strcmp(a.net_ip_text, refreshed_net_ip) != 0 ||
+                strcmp(a.ethernet_ip_text, refreshed_ethernet_ip) != 0 ||
+                strcmp(a.wifi_ip_text, refreshed_wifi_ip) != 0 ||
                 strcmp(a.ip_text, preferred_ip) != 0) {
                 snprintf(a.tb_ip_text, sizeof(a.tb_ip_text), "%s", refreshed_tb_ip);
+                snprintf(a.usb_ip_text, sizeof(a.usb_ip_text), "%s", refreshed_usb_ip);
                 snprintf(a.net_ip_text, sizeof(a.net_ip_text), "%s", refreshed_net_ip);
+                snprintf(a.ethernet_ip_text, sizeof(a.ethernet_ip_text), "%s", refreshed_ethernet_ip);
+                snprintf(a.wifi_ip_text, sizeof(a.wifi_ip_text), "%s", refreshed_wifi_ip);
                 snprintf(a.ip_text, sizeof(a.ip_text), "%s", preferred_ip);
                 build_display_host(a.display_host, sizeof(a.display_host), preferred_ip, have_refreshed_ip);
                 if (refreshed_tb_ip[0] != '\0') {
                     fprintf(stderr, "[main] Thunderbolt Bridge IP = %s\n", refreshed_tb_ip);
                 }
+                if (refreshed_usb_ip[0] != '\0') {
+                    fprintf(stderr, "[main] Direct USB-NCM IP = %s\n", refreshed_usb_ip);
+                }
                 if (refreshed_net_ip[0] != '\0') {
                     fprintf(stderr, "[main] Local network IP = %s\n", refreshed_net_ip);
+                }
+                if (refreshed_ethernet_ip[0] != '\0') {
+                    fprintf(stderr, "[main] Ethernet IP = %s\n", refreshed_ethernet_ip);
+                }
+                if (refreshed_wifi_ip[0] != '\0') {
+                    fprintf(stderr, "[main] Wi-Fi IP = %s\n", refreshed_wifi_ip);
                 }
                 bonjour_update(&a, TB_PORT);
             }
@@ -1994,6 +2154,8 @@ int main(int argc, char **argv) {
                 a.client_fd = c;
                 a.have_video_frame = 0;
                 a.session_active = 0;
+                a.reported_night_shift = -1;   /* force one report per session */
+                a.reported_true_tone = -1;
                 a.last_recv_ms = t;
                 SDL_DisableScreenSaver();
                 fprintf(stderr, "[main] client connected\n");
@@ -2030,6 +2192,12 @@ int main(int argc, char **argv) {
             tb_receiver_poll_permissions(&a);
         }
 
+        /* Cheap enough to poll: two private-framework getters, twice a second. */
+        if (t - a.last_tweak_poll_ms >= 500) {
+            a.last_tweak_poll_ms = t;
+            tb_receiver_send_display_tweaks_if_changed(&a);
+        }
+
         if (a.client_fd < 0 || !a.session_active) {
             /* No client, or a connection that hasn't started a real streaming
              * session (e.g. a transient UI-language push during discovery):
@@ -2063,22 +2231,22 @@ int main(int argc, char **argv) {
                     tb_receiver_send_input_event(&a, "scroll", 0, 0, 0, 0, 1, input_event.scroll_x, 1, input_event.scroll_y, 0, 0);
                     break;
                 case TB_INPUT_EVENT_LEFT_DOWN:
-                    tb_receiver_send_input_event(&a, "leftDown", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    tb_receiver_send_input_button_event(&a, "leftDown", input_event.click_count);
                     break;
                 case TB_INPUT_EVENT_LEFT_UP:
-                    tb_receiver_send_input_event(&a, "leftUp", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    tb_receiver_send_input_button_event(&a, "leftUp", input_event.click_count);
                     break;
                 case TB_INPUT_EVENT_RIGHT_DOWN:
-                    tb_receiver_send_input_event(&a, "rightDown", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    tb_receiver_send_input_button_event(&a, "rightDown", input_event.click_count);
                     break;
                 case TB_INPUT_EVENT_RIGHT_UP:
-                    tb_receiver_send_input_event(&a, "rightUp", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    tb_receiver_send_input_button_event(&a, "rightUp", input_event.click_count);
                     break;
                 case TB_INPUT_EVENT_OTHER_DOWN:
-                    tb_receiver_send_input_event(&a, "otherDown", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    tb_receiver_send_input_button_event(&a, "otherDown", input_event.click_count);
                     break;
                 case TB_INPUT_EVENT_OTHER_UP:
-                    tb_receiver_send_input_event(&a, "otherUp", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                    tb_receiver_send_input_button_event(&a, "otherUp", input_event.click_count);
                     break;
                 case TB_INPUT_EVENT_KEY_DOWN:
                     tb_receiver_send_input_event(&a, "keyDown", 0, 0, 0, 0, 0, 0, 0, 0, 1, input_event.key_code);
