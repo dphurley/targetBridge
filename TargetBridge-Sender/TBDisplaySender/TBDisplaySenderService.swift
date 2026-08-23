@@ -26,6 +26,7 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
     case native5k60Experimental
     /// Streams at whatever backing store the receiver reported, so nothing is
     /// resampled between the sender's framebuffer and the receiver's drawable.
+    /// Bit rate is tuned for a wired Thunderbolt Bridge link, not Wi-Fi.
     case matchReceiver
 
     var id: String { rawValue }
@@ -122,10 +123,16 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         case .native5k60Experimental:
             return 150_000_000
         case .matchReceiver:
-            // The fixed presets sit around 13 Mbps per megapixel at 60 fps;
-            // follow that curve rather than inventing a number, and clamp so a
-            // very small or very large receiver still lands somewhere sane.
-            return min(240_000_000, max(36_000_000, Int(size.megapixels * 13_000_000)))
+            // The fixed presets sit around 13 Mbps per megapixel at 60 fps,
+            // which is sized for Wi-Fi. This preset targets a wired Thunderbolt
+            // Bridge link — roughly 8-15 Gbps of real throughput over lossless
+            // TCP — so quantisation, not bandwidth, is the binding constraint.
+            //
+            // 40 Mbps/megapixel is ~3x that curve and still only a few percent
+            // of the link. The 400 Mbps ceiling keeps us inside HEVC Level 6.1
+            // High tier (480 Mbps) with margin, so VideoToolbox does not clamp
+            // or emit a stream the receiver's decoder rejects.
+            return min(400_000_000, max(60_000_000, Int(size.megapixels * 40_000_000)))
         }
     }
 

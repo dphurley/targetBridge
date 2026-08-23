@@ -116,9 +116,28 @@ final class TBCapturePresetSizeTests: XCTestCase {
         )
 
         XCTAssertGreaterThan(air, smaller)
-        // Sits between the tuned 4K and 5K presets, matching the existing curve.
-        XCTAssertGreaterThan(air, TBDisplayCapturePreset.crisp2160p60.averageBitRate(for: TBCaptureSize(width: 3840, height: 2160)))
-        XCTAssertLessThan(air, TBDisplayCapturePreset.native5k60Experimental.averageBitRate(for: TBCaptureSize(width: 5120, height: 2880)))
+        // Tuned for wired Thunderbolt, so it should sit well above the Wi-Fi
+        // oriented 5K preset rather than on the same curve.
+        XCTAssertGreaterThan(
+            air,
+            TBDisplayCapturePreset.native5k60Experimental.averageBitRate(
+                for: TBCaptureSize(width: 5120, height: 2880)
+            )
+        )
+    }
+
+    /// The ceiling keeps the stream inside HEVC Level 6.1 High tier (480 Mbps)
+    /// so VideoToolbox does not clamp or emit an undecodable stream.
+    func testMatchReceiverBitRateStaysWithinHEVCLevelLimits() {
+        let huge = TBDisplayCapturePreset.matchReceiver.averageBitRate(
+            for: TBCaptureSize(width: 7680, height: 4320)
+        )
+        let tiny = TBDisplayCapturePreset.matchReceiver.averageBitRate(
+            for: TBCaptureSize(width: 640, height: 480)
+        )
+
+        XCTAssertLessThanOrEqual(huge, 400_000_000)
+        XCTAssertGreaterThanOrEqual(tiny, 60_000_000)
     }
 
     func testFixedPresetBitRatesAreUnchanged() {
