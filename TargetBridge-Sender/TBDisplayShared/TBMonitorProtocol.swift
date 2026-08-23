@@ -139,6 +139,23 @@ struct TBMonitorReceiverBattery: Codable, Equatable {
 /// indicator disappears — this is what puts the charge level in front of the
 /// user, who is sitting at the sender.
 struct TBReceiverBatteryState: Equatable {
+    /// SF Symbol matching the charge level, shared by the target card and the
+    /// menu bar so the two never disagree about which glyph a level maps to.
+    var symbolName: String {
+        if isCharging { return "battery.100percent.bolt" }
+        switch percentage {
+        case ..<15: return "battery.0percent"
+        case ..<40: return "battery.25percent"
+        case ..<65: return "battery.50percent"
+        case ..<90: return "battery.75percent"
+        default: return "battery.100percent"
+        }
+    }
+
+    /// Low enough to act on. Charging is excluded: a charging receiver at 8%
+    /// is heading the right way and does not need to shout.
+    var needsAttention: Bool { !isCharging && percentage <= 20 }
+
     /// `false` on a desktop receiver (Mac mini, iMac, Mac Studio): no battery
     /// to show at all, as opposed to a battery at 0%.
     var isPresent: Bool

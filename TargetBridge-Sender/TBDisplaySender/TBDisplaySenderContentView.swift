@@ -419,12 +419,18 @@ private struct TBTargetCard: View {
 
     private func batteryRow(_ battery: TBReceiverBatteryState) -> some View {
         HStack(spacing: 7) {
-            Image(systemName: batterySymbol(battery))
+            // Same rule as the menu bar, so the card and the status item never
+            // disagree about whether a level is worth worrying about.
+            Image(systemName: battery.symbolName)
                 .font(.system(size: 11))
-                .foregroundStyle(battery.isCharging ? TBTheme.teal : TBTheme.textDim)
+                .foregroundStyle(
+                    battery.needsAttention ? TBTheme.accent
+                        : battery.isCharging ? TBTheme.teal
+                        : TBTheme.textDim
+                )
             Text("\(battery.percentage)%")
                 .font(TBFont.mono(10))
-                .foregroundStyle(TBTheme.textSecondary)
+                .foregroundStyle(battery.needsAttention ? TBTheme.accent : TBTheme.textSecondary)
             TBLabel(
                 battery.isCharging
                     ? service.language.str("sender.battery.charging")
@@ -434,16 +440,6 @@ private struct TBTargetCard: View {
         .help(service.language.str("sender.battery.label"))
     }
 
-    private func batterySymbol(_ battery: TBReceiverBatteryState) -> String {
-        if battery.isCharging { return "battery.100percent.bolt" }
-        switch battery.percentage {
-        case ..<15: return "battery.0percent"
-        case ..<40: return "battery.25percent"
-        case ..<65: return "battery.50percent"
-        case ..<90: return "battery.75percent"
-        default: return "battery.100percent"
-        }
-    }
 
     private var primaryAction: some View {
         Button(session.isConnected
