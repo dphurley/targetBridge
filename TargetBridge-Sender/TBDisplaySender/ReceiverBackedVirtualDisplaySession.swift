@@ -153,12 +153,26 @@ final class ReceiverBackedVirtualDisplaySession {
             for: identity,
             receiverKey: receiverKey
         )
-        let savedChoice = modeOverride == nil
+        // A saved 1x choice against a HiDPI profile is an artefact of macOS
+        // settling the display, not a deliberate pick, and restoring it would
+        // re-impose the very fault it recorded. Discard it.
+        let rawSavedChoice = modeOverride == nil
             ? TBVirtualDisplayModeMemory.shared.load(forKey: preferenceKey)
             : nil
+        let savedChoice = rawSavedChoice.flatMap { choice -> TBVirtualDisplayModeMemory.Choice? in
+            guard profile.hiDPI,
+                  choice.pixelWidth == choice.pointWidth,
+                  choice.pixelHeight == choice.pointHeight else { return choice }
+            NSLog(
+                "TargetBridge: discarding remembered 1x mode %dx%d for a HiDPI receiver",
+                choice.pointWidth, choice.pointHeight
+            )
+            return nil
+        }
         activatePreferredMode(for: display.displayID,
                               mode: resolvedMode,
                               refreshRate: preferredRefreshRate,
+                              hiDPI: profile.hiDPI,
                               savedChoice: savedChoice)
 
         virtualDisplay = display
@@ -186,13 +200,14 @@ final class ReceiverBackedVirtualDisplaySession {
     private func activatePreferredMode(for displayID: CGDirectDisplayID,
                                        mode: TBVirtualDisplayModeSize,
                                        refreshRate: Double,
+                                       hiDPI: Bool,
                                        savedChoice: TBVirtualDisplayModeMemory.Choice?) -> Bool {
         let timeout = Date().addingTimeInterval(2.0)
         while Date() < timeout {
             var success = false
             autoreleasepool {
                 let chosenMode = savedChoice.flatMap { savedMode(for: displayID, choice: $0) }
-                    ?? preferredMode(for: displayID, mode: mode, refreshRate: refreshRate)
+                    ?? preferredMode(for: displayID, mode: mode, refreshRate: refreshRate, hiDPI: hiDPI)
                 if let chosenMode {
                     success = CGDisplaySetDisplayMode(displayID, chosenMode, nil) == .success
                 }
@@ -226,20 +241,46 @@ final class ReceiverBackedVirtualDisplaySession {
         return candidates.first
     }
 
-    private func preferredMode(for displayID: CGDirectDisplayID, mode: TBVirtualDisplayModeSize, refreshRate: Double) -> CGDisplayMode? {
-        guard let modesCF = CGDisplayCopyAllDisplayModes(displayID, nil) else {
+    private func preferredMode(for displayID: CGDirectDisplayID,
+                               mode: TBVirtualDisplayModeSize,
+                               refreshRate: Double,
+                               hiDPI: Bool) -> CGDisplayMode? {
+        // Enumerate duplicates so the 1x twin of a HiDPI mode is visible and can
+        // be discriminated against below, rather than left to chance.
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
+        guard let modesCF = CGDisplayCopyAllDisplayModes(displayID, options) else {
             return nil
         }
         let modes = modesCF as? [CGDisplayMode] ?? []
 
-        let matchingModes = modes.filter { candidate in
+        var matchingModes = modes.filter { candidate in
             candidate.width == mode.width && candidate.height == mode.height
-        }.sorted { $0.refreshRate > $1.refreshRate }
+        }
 
-        if let exactMatch = matchingModes.first(where: { abs($0.refreshRate - refreshRate) < 0.5 }) {
+        // A HiDPI mode and its 1x duplicate report identical point dimensions;
+        // only the backing store tells them apart. Filtering on point size alone
+        // let the 1x variant win on enumeration order, which silently halved the
+        // render resolution: the desktop looked the right size but every glyph
+        // was rasterised at 1x and then upscaled by the capture stage.
+        if hiDPI {
+            let retina = matchingModes.filter {
+                $0.pixelWidth == mode.backingWidth && $0.pixelHeight == mode.backingHeight
+            }
+            if !retina.isEmpty {
+                matchingModes = retina
+            } else {
+                NSLog(
+                    "TargetBridge: no HiDPI mode %dx%d (backing %dx%d) offered by display %u; falling back to 1x",
+                    mode.width, mode.height, mode.backingWidth, mode.backingHeight, displayID
+                )
+            }
+        }
+
+        let sorted = matchingModes.sorted { $0.refreshRate > $1.refreshRate }
+        if let exactMatch = sorted.first(where: { abs($0.refreshRate - refreshRate) < 0.5 }) {
             return exactMatch
         }
 
-        return matchingModes.first
+        return sorted.first
     }
 }
