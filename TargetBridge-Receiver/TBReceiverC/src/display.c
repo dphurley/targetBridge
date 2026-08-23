@@ -504,6 +504,18 @@ static void tb_disp_refresh_window_mode(struct tb_display *d) {
         SDL_SetWindowPosition(d->win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
 
+    /* The drawable, not the window, is what the video texture is blitted into.
+     * If it does not match the incoming frame size the renderer rescales and
+     * the picture goes soft while every other number still looks correct. */
+    {
+        int win_w = 0, win_h = 0, draw_w = 0, draw_h = 0;
+        SDL_GetWindowSize(d->win, &win_w, &win_h);
+        if (d->ren) SDL_GetRendererOutputSize(d->ren, &draw_w, &draw_h);
+        fprintf(stderr, "[disp] window %dx%d -> drawable %dx%d (%s)\n",
+                win_w, win_h, draw_w, draw_h,
+                ((d->is_connected || d->is_connecting) && d->preferred_fullscreen) ? "fullscreen" : "windowed");
+    }
+
     const int should_hide_cursor =
         ((d->is_connected || d->is_connecting) && d->preferred_fullscreen) ||
         d->input_capture_active ||
