@@ -1,118 +1,86 @@
 import SwiftUI
 
+/// About: one panel, centred. The wordmark, one sentence about what this is,
+/// two links, and the people who made it.
 struct TBDisplaySenderAboutView: View {
     @ObservedObject var service: TBDisplaySenderService
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            SurfaceCard {
-                HStack(alignment: .top, spacing: 16) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.green.opacity(0.30),
-                                        Color.cyan.opacity(0.16)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                        Image(systemName: "display.2")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.95))
-                    }
-                    .frame(width: 74, height: 74)
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                Text(TBDisplaySenderL10n.appName(service.language))
+                    .font(TBFont.display(38))
+                    .tracking(1)
+                    .foregroundStyle(TBTheme.textPrimary)
+
+                TBAccentUnderline(width: 56)
+                    .padding(.top, 14)
+
+                Text(aboutSubtitle)
+                    .font(TBFont.body(12))
+                    .foregroundStyle(TBTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 400)
+                    .padding(.top, 24)
+
+                HStack(spacing: 10) {
+                    TBLabel("\(TBDisplaySenderL10n.versionLabel(service.language)) \(TBDisplaySenderBuildInfo.versionDisplay)")
+                    TBRule(vertical: true, length: 10)
+                    TBLabel("swellweb")
+                }
+                .padding(.top, 20)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(projectDescription)
+                        .font(TBFont.body(11))
+                        .foregroundStyle(TBTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    TBRule()
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(TBDisplaySenderL10n.appName(service.language))
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text(aboutSubtitle)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        versionChip
-                    }
-
-                    Spacer()
-
-                    Button(closeTitle) {
-                        dismiss()
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-
-            SurfaceCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    sectionHeading(projectTitle)
-                    Text(projectDescription)
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 12) {
-                        Link(destination: URL(string: "https://github.com/swellweb/targetBridge")!) {
-                            Label(githubTitle, systemImage: "link")
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Link(destination: URL(string: "https://github.com/swellweb/targetBridge/releases/latest")!) {
-                            Label(releaseTitle, systemImage: "shippingbox")
-                        }
-                        .buttonStyle(.bordered)
+                        TBLabel(creditsTitle)
+                        Text(creditsBody)
+                            .font(TBFont.body(11))
+                            .foregroundStyle(TBTheme.textDim)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-            }
+                .padding(18)
+                .frame(maxWidth: 460, alignment: .leading)
+                .tbPanel(brackets: true)
+                .padding(.top, 30)
 
-            SurfaceCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    sectionHeading(creditsTitle)
-                    Text(creditsBody)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Link(destination: URL(string: "https://github.com/swellweb/targetBridge")!) {
+                        Text(githubTitle)
+                    }
+                    .buttonStyle(TBSecondaryButtonStyle())
+
+                    Link(destination: URL(string: "https://github.com/swellweb/targetBridge/releases/latest")!) {
+                        Text(releaseTitle)
+                    }
+                    .buttonStyle(TBSecondaryButtonStyle())
                 }
+                .padding(.top, 24)
+
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 40)
+            .padding(.vertical, 36)
+
+            Button(service.language.str("common.close")) {
+                dismiss()
+            }
+            .buttonStyle(TBTextActionStyle())
+            .padding(20)
         }
-        .padding(20)
-        .frame(minWidth: 620, minHeight: 420)
-        .background(appBackground)
-        // Fixed dark background → force dark scheme so semantic text colors stay
-        // light and don't render dark-on-dark in system Light mode.
-        .preferredColorScheme(.dark)
-    }
-
-    private var versionChip: some View {
-        Text("\(versionTitle) \(TBDisplaySenderBuildInfo.versionDisplay)")
-            .font(.system(.footnote, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-            )
-    }
-
-    private func sectionHeading(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(.caption, design: .rounded, weight: .bold))
-            .tracking(1.0)
-            .foregroundStyle(.secondary)
-    }
-
-    private var appBackground: some View {
-        LinearGradient(
-            colors: [
-                Color(red: 0.12, green: 0.13, blue: 0.14),
-                Color(red: 0.08, green: 0.09, blue: 0.10)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+        .tbSheetChrome(width: 560, height: 560)
     }
 
     private var aboutSubtitle: String {
@@ -122,16 +90,6 @@ struct TBDisplaySenderAboutView: View {
         case .german: return "Bringt die Idee von Target Display Mode mit einer direkten Mac-zu-Mac-Display-Pipeline zurück auf Apple Silicon."
         case .french: return "Redonne vie à l’idée du Target Display Mode sur Apple Silicon grâce à une chaîne d’affichage directe de Mac à Mac."
         case .chinese: return "通过直接的 Mac 到 Mac 显示管线，把 Target Display Mode 的理念带回 Apple Silicon 时代。"
-        }
-    }
-
-    private var projectTitle: String {
-        switch service.language {
-        case .italian: return "Progetto"
-        case .english: return "Project"
-        case .german: return "Projekt"
-        case .french: return "Projet"
-        case .chinese: return "项目"
         }
     }
 
@@ -166,13 +124,7 @@ struct TBDisplaySenderAboutView: View {
     }
 
     private var githubTitle: String {
-        switch service.language {
-        case .italian: return "GitHub"
-        case .english: return "GitHub"
-        case .german: return "GitHub"
-        case .french: return "GitHub"
-        case .chinese: return "GitHub"
-        }
+        "GitHub"
     }
 
     private var releaseTitle: String {
@@ -182,26 +134,6 @@ struct TBDisplaySenderAboutView: View {
         case .german: return "Letztes Release"
         case .french: return "Dernière version"
         case .chinese: return "最新发布"
-        }
-    }
-
-    private var versionTitle: String {
-        switch service.language {
-        case .italian: return "Versione"
-        case .english: return "Version"
-        case .german: return "Version"
-        case .french: return "Version"
-        case .chinese: return "版本"
-        }
-    }
-
-    private var closeTitle: String {
-        switch service.language {
-        case .italian: return "Chiudi"
-        case .english: return "Close"
-        case .german: return "Schließen"
-        case .french: return "Fermer"
-        case .chinese: return "关闭"
         }
     }
 }

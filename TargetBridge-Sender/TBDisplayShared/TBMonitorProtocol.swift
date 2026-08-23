@@ -19,6 +19,8 @@ enum TBMonitorPacketType: UInt8 {
     case volume = 0x37
     /// Night Shift / True Tone on the receiver's panel.
     case displayTweaks = 0x38
+    /// The receiver's own battery, pushed to the sender (receiver → sender only).
+    case receiverBattery = 0x39
     case testData = 0x40
 }
 
@@ -115,6 +117,51 @@ struct TBMonitorDisplayTweaks: Codable {
 
 struct TBMonitorClipboard: Codable {
     var text: String
+}
+
+/// Wire form of the receiver's battery report (packet `0x39`).
+///
+/// Every field is optional on purpose: the receiver omits `minutesRemaining`
+/// while macOS is still calculating an estimate, and a future receiver may add
+/// fields this build has never heard of. Decoding must never fail just because
+/// the two ends are on different versions.
+struct TBMonitorReceiverBattery: Codable, Equatable {
+    var isPresent: Bool?
+    var percentage: Int?
+    var isCharging: Bool?
+    /// Minutes to empty (discharging) or to full (charging). Absent = unknown.
+    var minutesRemaining: Int?
+}
+
+/// The receiver's battery, normalized for display.
+///
+/// The receiver hides its menu bar when it goes fullscreen, so its own battery
+/// indicator disappears — this is what puts the charge level in front of the
+/// user, who is sitting at the sender.
+struct TBReceiverBatteryState: Equatable {
+    /// `false` on a desktop receiver (Mac mini, iMac, Mac Studio): no battery
+    /// to show at all, as opposed to a battery at 0%.
+    var isPresent: Bool
+    /// Clamped to 0...100.
+    var percentage: Int
+    var isCharging: Bool
+    /// Minutes to empty, or to full while charging. `nil` when macOS has no
+    /// estimate yet (typically for a minute or two after a power transition).
+    var minutesRemaining: Int?
+
+    /// Normalizes a wire report. Missing fields fall back to "no battery, 0%,
+    /// not charging" rather than failing, so a partial report from a newer or
+    /// older receiver still renders something truthful.
+    init(report: TBMonitorReceiverBattery) {
+        isPresent = report.isPresent ?? false
+        percentage = min(max(report.percentage ?? 0, 0), 100)
+        isCharging = report.isCharging ?? false
+        if let minutes = report.minutesRemaining, minutes > 0 {
+            minutesRemaining = minutes
+        } else {
+            minutesRemaining = nil
+        }
+    }
 }
 
 /// Framing-level corruption that cannot be recovered by waiting for more

@@ -122,6 +122,17 @@ final class TBDisplaySenderStatusItemController: NSObject {
                     header.isEnabled = false
                     menu.addItem(header)
                 }
+                // The receiver hides its own menu bar while it is presenting, so
+                // its charge is only visible from here.
+                if let battery = TBPendingIntegration.batteryState(for: session) {
+                    let item = NSMenuItem(title: batteryMenuTitle(battery), action: nil, keyEquivalent: "")
+                    item.isEnabled = false
+                    item.image = NSImage(
+                        systemSymbolName: battery.isCharging ? "battery.100percent.bolt" : "battery.50percent",
+                        accessibilityDescription: nil
+                    )
+                    menu.addItem(item)
+                }
                 menu.addItem(makeSliderItem(symbol: "sun.min.fill",
                                             trailingSymbol: "sun.max.fill",
                                             label: brightnessMenuLabel(),
@@ -291,13 +302,16 @@ final class TBDisplaySenderStatusItemController: NSObject {
     }
 
     private func brightnessMenuLabel() -> String {
-        switch service.language {
-        case .italian: return "Luminosità"
-        case .french: return "Luminosité"
-        case .english: return "Brightness"
-        case .german: return "Helligkeit"
-        case .chinese: return "亮度"
-        }
+        TBDisplaySenderL10n.text("sender.display.brightness", service.language)
+    }
+
+    /// "Receiver battery: 82% · Charging"
+    private func batteryMenuTitle(_ battery: TBReceiverBatteryState) -> String {
+        let state = battery.isCharging
+            ? TBDisplaySenderL10n.text("sender.battery.charging", service.language)
+            : TBDisplaySenderL10n.text("sender.battery.on_battery", service.language)
+        let label = TBDisplaySenderL10n.text("sender.battery.label", service.language)
+        return "\(label): \(battery.percentage)% · \(state)"
     }
 
     private func onWord() -> String {
@@ -321,33 +335,11 @@ final class TBDisplaySenderStatusItemController: NSObject {
     }
 
     private func nightShiftMenuLabel() -> String {
-        switch service.language {
-        case .italian: return "Night Shift"
-        case .english: return "Night Shift"
-        case .german: return "Night Shift"
-        case .chinese: return "夜览"
-        case .french: return "Night Shift"
-        }
+        TBDisplaySenderL10n.text("sender.display.night_shift", service.language)
     }
 
     private func trueToneMenuLabel() -> String {
-        switch service.language {
-        case .italian: return "True Tone"
-        case .english: return "True Tone"
-        case .german: return "True Tone"
-        case .chinese: return "原彩显示"
-        case .french: return "True Tone"
-        }
-    }
-
-    private func volumeMenuLabel() -> String {
-        switch service.language {
-        case .italian: return "Volume"
-        case .french: return "Volume"
-        case .english: return "Volume"
-        case .german: return "Lautstärke"
-        case .chinese: return "音量"
-        }
+        TBDisplaySenderL10n.text("sender.display.true_tone", service.language)
     }
 
     private func connectionInfoMenuLabel() -> String {

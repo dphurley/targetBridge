@@ -17,6 +17,7 @@
 		2C4E1C76CA81F640C700F6BF /* TBMonitorProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9583EB47BCD79FA719EEA77 /* TBMonitorProtocolTests.swift */; };
 		337BD561622AA19F43D3B95B /* ReceiverBackedVirtualDisplaySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C242540F9DE94E1364F106F4 /* ReceiverBackedVirtualDisplaySession.swift */; };
 		4290B6572B8CA96E01C56425 /* TBDisplaySenderBuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEB4DF6C72B5C50C29AE6E45 /* TBDisplaySenderBuildInfo.swift */; };
+		B1A0C0DE0000000000000002 /* TBAutoConnectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A0C0DE0000000000000001 /* TBAutoConnectTests.swift */; };
 		4A8719A8C13A6560F4F0EB0D /* TBSenderAutomationParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED08E3D2FCC8194F8B8185C9 /* TBSenderAutomationParsingTests.swift */; };
 		4B770D1232C53EF66F011F7F /* TBAddonManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59E4D00FB492A41B5218CD52 /* TBAddonManifest.swift */; };
 		4C59B780CEA3CC5F563BC86F /* TBInjectedClickStateTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4134F78ABD695DF9DB5D485B /* TBInjectedClickStateTracker.swift */; };
@@ -110,6 +111,7 @@
 		DA01317B43B46B1B323A7008 /* TBMonitorProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TBMonitorProtocol.swift; sourceTree = "<group>"; };
 		DD33D06A2FA6BA7E075A9E46 /* TBDisplaySenderSurfaceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TBDisplaySenderSurfaceViews.swift; sourceTree = "<group>"; };
 		DFB8219C144AA88D16BB4F59 /* TBDisplaySenderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TBDisplaySenderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1A0C0DE0000000000000001 /* TBAutoConnectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TBAutoConnectTests.swift; sourceTree = "<group>"; };
 		ED08E3D2FCC8194F8B8185C9 /* TBSenderAutomationParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TBSenderAutomationParsingTests.swift; sourceTree = "<group>"; };
 		EF17070AC1C6F9E9F3B4DFDF /* TBInjectedClickStateTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TBInjectedClickStateTrackerTests.swift; sourceTree = "<group>"; };
 		C7A1D4E29B3F45A88C3D0051 /* TBMenuMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TBMenuMetrics.swift; sourceTree = "<group>"; };
@@ -159,6 +161,7 @@
 		578C8E4277884577DC1F2820 /* TBDisplaySenderTests */ = {
 			isa = PBXGroup;
 			children = (
+				B1A0C0DE0000000000000001 /* TBAutoConnectTests.swift */,
 				A7086193EE5710E2C37F86F1 /* TBConfigurationDiagnosticsTests.swift */,
 				405452C4DA622D0B8887623E /* TBConnectionDiagnosticsTests.swift */,
 				D419C88EEEA66EE0829BA975 /* TBDisplayProfileTests.swift */,
@@ -361,6 +364,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B1A0C0DE0000000000000002 /* TBAutoConnectTests.swift in Sources */,
 				7528751850893B52660870E4 /* TBConfigurationDiagnosticsTests.swift in Sources */,
 				7F103818097EEBD191C5ADBF /* TBConnectionDiagnosticsTests.swift in Sources */,
 				5109DFCF1BFD76222E7B4BDD /* TBDisplayProfileTests.swift in Sources */,

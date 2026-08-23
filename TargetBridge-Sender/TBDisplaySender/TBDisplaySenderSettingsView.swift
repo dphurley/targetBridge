@@ -2,140 +2,55 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum TBPreferencesTab: Hashable {
+    case general
+    case interface
+    case addons
+    case about
+}
+
+/// App-wide preferences. Same rail idea as the session sheet: one concern on
+/// screen, nothing stacked into an endless scroll.
 struct TBDisplaySenderSettingsView: View {
     @ObservedObject var service: TBDisplaySenderService
     @State private var importError: String?
+    @State private var tab: TBPreferencesTab = .general
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                SurfaceCard {
-                    HStack(alignment: .top, spacing: 16) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.green.opacity(0.30),
-                                            Color.cyan.opacity(0.16)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 24, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.95))
-                        }
-                        .frame(width: 68, height: 68)
+        ZStack {
+            TBBackground()
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(settingsTitle)
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                            Text(settingsSubtitle)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            versionChip
-                        }
+            VStack(alignment: .leading, spacing: 0) {
+                header
 
-                        Spacer()
-                    }
-                }
+                TBRule()
 
-                settingsSection(title: generalTitle) {
-                    Picker(TBDisplaySenderL10n.languageGroup(service.language), selection: $service.language) {
-                        ForEach(TBDisplaySenderLanguage.allCases) { language in
-                            Text(language.pickerTitle).tag(language)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
+                HStack(alignment: .top, spacing: 0) {
+                    TBSectionRail(items: railItems, selection: $tab)
+                        .frame(width: 150, alignment: .leading)
+                        .padding(.horizontal, 22)
+                        .padding(.top, 22)
 
-                settingsSection(title: interfaceTitle) {
-                    Toggle(TBDisplaySenderL10n.showMenuBarIcon(service.language), isOn: $service.showsMenuBarIcon)
-                    Toggle(TBDisplaySenderL10n.largeCursor(service.language), isOn: $service.largeCursor)
-                        .disabled(service.anyConnected)
-                    Toggle(TBDisplaySenderL10n.preventDisplaySleep(service.language), isOn: $service.preventDisplaySleep)
-                    Toggle(TBDisplaySenderL10n.autoRestartOnWake(service.language), isOn: $service.autoRestartOnWake)
-                    Toggle(TBDisplaySenderL10n.verboseDisplayLogging(service.language), isOn: $service.verboseDisplayLogging)
-                }
+                    TBRule(vertical: true)
+                        .frame(maxHeight: .infinity)
 
-                settingsSection(title: behaviorTitle) {
-                    Text(TBDisplaySenderL10n.settingsHint(service.language))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text(TBDisplaySenderL10n.modeLine3(service.language))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text(TBDisplaySenderL10n.modeLine5(service.language))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                settingsSection(title: addonsTitle) {
-                    Text(addonsSubtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if service.anyConnected {
-                        Text(addonsConnectedHint)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 12) {
-                        Button(importAddonTitle) {
-                            importAddonManifest()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button(refreshAddonsTitle) {
-                            service.refreshAddons()
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button(openAddonsFolderTitle) {
-                            service.openAddonsFolder()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    if service.addons.isEmpty {
-                        Text(noAddonsTitle)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } else {
+                    ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                            ForEach(service.addons) { addon in
-                                addonCard(addon)
+                            switch tab {
+                            case .general: generalSection
+                            case .interface: interfaceSection
+                            case .addons: addonsSection
+                            case .about: aboutSection
                             }
                         }
-                    }
-                }
-
-                settingsSection(title: aboutTitle) {
-                    Text(aboutBody)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 12) {
-                        Link(destination: URL(string: "https://github.com/swellweb/targetBridge")!) {
-                            Label(githubTitle, systemImage: "link")
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Link(destination: URL(string: "https://github.com/swellweb/targetBridge/releases/latest")!) {
-                            Label(releaseTitle, systemImage: "shippingbox")
-                        }
-                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(22)
                     }
                 }
             }
-            .padding(20)
         }
-        .background(appBackground)
+        .preferredColorScheme(.dark)
+        .tint(TBTheme.accent)
         .alert(addonImportErrorTitle, isPresented: Binding(
             get: { importError != nil },
             set: { if !$0 { importError = nil } }
@@ -148,98 +63,210 @@ struct TBDisplaySenderSettingsView: View {
         }
     }
 
-    private func settingsSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(title.uppercased())
-                    .font(.system(.caption, design: .rounded, weight: .bold))
-                    .tracking(1.0)
-                    .foregroundStyle(.secondary)
-                content()
+    private var railItems: [TBRailItem<TBPreferencesTab>] {
+        [
+            TBRailItem(tab: .general, title: service.language.str("sender.section.general")),
+            TBRailItem(tab: .interface, title: service.language.str("sender.section.interface")),
+            TBRailItem(tab: .addons, title: service.language.str("sender.section.addons")),
+            TBRailItem(tab: .about, title: service.language.str("sender.section.about"))
+        ]
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(settingsTitle)
+                    .font(TBFont.display(24))
+                    .foregroundStyle(TBTheme.textPrimary)
+                Text(settingsSubtitle)
+                    .font(TBFont.body(11))
+                    .foregroundStyle(TBTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            Spacer(minLength: 12)
+
+            TBLabel("\(versionTitle) \(TBDisplaySenderBuildInfo.versionDisplay)")
+        }
+        .padding(.horizontal, 26)
+        .padding(.top, 26)
+        .padding(.bottom, 20)
+    }
+
+    // MARK: General
+
+    private var generalSection: some View {
+        Group {
+            TBSettingRow(label: TBDisplaySenderL10n.languageGroup(service.language)) {
+                HStack(spacing: 12) {
+                    ForEach(TBDisplaySenderLanguage.allCases) { language in
+                        Button(language.pickerTitle) {
+                            service.language = language
+                        }
+                        .buttonStyle(TBTextActionStyle(accented: service.language == language))
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(TBDisplaySenderL10n.settingsHint(service.language))
+                Text(TBDisplaySenderL10n.modeLine3(service.language))
+                Text(TBDisplaySenderL10n.modeLine5(service.language))
+            }
+            .font(TBFont.body(11))
+            .foregroundStyle(TBTheme.textDim)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 6)
         }
     }
 
-    private var versionChip: some View {
-        Text("\(versionTitle) \(TBDisplaySenderBuildInfo.versionDisplay)")
-            .font(.system(.footnote, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.06))
+    // MARK: Interface
+
+    private var interfaceSection: some View {
+        Group {
+            toggleRow(TBDisplaySenderL10n.showMenuBarIcon(service.language), isOn: $service.showsMenuBarIcon)
+            toggleRow(
+                TBDisplaySenderL10n.largeCursor(service.language),
+                isOn: $service.largeCursor,
+                disabled: service.anyConnected
             )
+            toggleRow(TBDisplaySenderL10n.preventDisplaySleep(service.language), isOn: $service.preventDisplaySleep)
+            toggleRow(TBDisplaySenderL10n.autoRestartOnWake(service.language), isOn: $service.autoRestartOnWake)
+            toggleRow(TBDisplaySenderL10n.verboseDisplayLogging(service.language), isOn: $service.verboseDisplayLogging)
+        }
+    }
+
+    private func toggleRow(_ label: String, isOn: Binding<Bool>, disabled: Bool = false) -> some View {
+        TBSettingRow(label: label) {
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(TBTheme.accent)
+                .disabled(disabled)
+        }
+    }
+
+    // MARK: Add-ons
+
+    private var addonsSection: some View {
+        Group {
+            Text(addonsSubtitle)
+                .font(TBFont.body(11))
+                .foregroundStyle(TBTheme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if service.anyConnected {
+                Text(addonsConnectedHint)
+                    .font(TBFont.body(11))
+                    .foregroundStyle(TBTheme.warning.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 10) {
+                Button(importAddonTitle) {
+                    importAddonManifest()
+                }
+                .buttonStyle(TBPrimaryButtonStyle(wide: false))
+
+                Button(refreshAddonsTitle) {
+                    service.refreshAddons()
+                }
+                .buttonStyle(TBSecondaryButtonStyle())
+
+                Button(openAddonsFolderTitle) {
+                    service.openAddonsFolder()
+                }
+                .buttonStyle(TBSecondaryButtonStyle())
+            }
+            .padding(.vertical, 4)
+
+            if service.addons.isEmpty {
+                Text(noAddonsTitle)
+                    .font(TBFont.body(11))
+                    .foregroundStyle(TBTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(service.addons) { addon in
+                        addonCard(addon)
+                    }
+                }
+            }
+        }
     }
 
     private func addonCard(_ addon: TBAddonRecord) -> some View {
-        SurfaceSubcard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(addon.name)
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        Text(addon.summary)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Spacer()
-
-                    Toggle(
-                        service.isAddonEnabled(addon) ? addonEnabledTitle : addonDisabledTitle,
-                        isOn: Binding(
-                            get: { service.isAddonEnabled(addon) },
-                            set: { service.setAddonEnabled($0, for: addon) }
-                        )
-                    )
-                    .toggleStyle(.switch)
-                    .disabled(!service.isAddonCompatible(addon) || service.anyConnected)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(addon.name)
+                        .font(TBFont.body(14, weight: .light))
+                        .foregroundStyle(TBTheme.textPrimary)
+                    Text(addon.summary)
+                        .font(TBFont.body(11))
+                        .foregroundStyle(TBTheme.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
+                Spacer(minLength: 12)
+
+                Toggle("", isOn: Binding(
+                    get: { service.isAddonEnabled(addon) },
+                    set: { service.setAddonEnabled($0, for: addon) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(TBTheme.accent)
+                .disabled(!service.isAddonCompatible(addon) || service.anyConnected)
+            }
+
+            HStack(spacing: 8) {
+                TBTag(originTitle(for: addon.origin), tint: addon.origin == .bundled ? TBTheme.teal : TBTheme.textSecondary)
+                TBTag("\(versionTitle) \(addon.version)")
+                if addon.manifest.experimental {
+                    TBTag(experimentalTitle, tint: TBTheme.warning)
+                }
+                if !service.isAddonCompatible(addon) {
+                    TBTag(incompatibleTitle, tint: TBTheme.accent)
+                }
+            }
+
+            if !addon.manifest.capabilities.isEmpty {
                 HStack(spacing: 8) {
-                    addonChip(originTitle(for: addon.origin), tint: addon.origin == .bundled ? .cyan : .orange)
-                    addonChip("\(versionTitle) \(addon.version)", tint: .secondary)
-                    if addon.manifest.experimental {
-                        addonChip(experimentalTitle, tint: .yellow)
-                    }
-                    if !service.isAddonCompatible(addon) {
-                        addonChip(incompatibleTitle, tint: .red)
-                    }
-                }
-
-                    if !addon.manifest.capabilities.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(capabilitiesTitle)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 8) {
-                            ForEach(addon.manifest.capabilities, id: \.self) { capability in
-                                addonChip(capabilityTitle(for: capability), tint: .green)
-                            }
-                        }
+                    TBLabel(capabilitiesTitle)
+                    ForEach(addon.manifest.capabilities, id: \.self) { capability in
+                        TBTag(capabilityTitle(for: capability), tint: TBTheme.textSecondary)
                     }
                 }
             }
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .tbPanel()
     }
 
-    private func addonChip(_ title: String, tint: Color) -> some View {
-        Text(title)
-            .font(.system(.caption, design: .rounded, weight: .bold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(tint.opacity(0.12))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(tint.opacity(0.25), lineWidth: 1)
-            )
+    // MARK: About
+
+    private var aboutSection: some View {
+        Group {
+            Text(aboutBody)
+                .font(TBFont.body(11))
+                .foregroundStyle(TBTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Link(destination: URL(string: "https://github.com/swellweb/targetBridge")!) {
+                    Text(githubTitle)
+                }
+                .buttonStyle(TBSecondaryButtonStyle())
+
+                Link(destination: URL(string: "https://github.com/swellweb/targetBridge/releases/latest")!) {
+                    Text(releaseTitle)
+                }
+                .buttonStyle(TBSecondaryButtonStyle())
+            }
+            .padding(.top, 6)
+        }
     }
 
     private func importAddonManifest() {
@@ -258,17 +285,7 @@ struct TBDisplaySenderSettingsView: View {
         }
     }
 
-    private var appBackground: some View {
-        LinearGradient(
-            colors: [
-                Color(red: 0.12, green: 0.13, blue: 0.14),
-                Color(red: 0.08, green: 0.09, blue: 0.10)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
-    }
+    // MARK: Copy
 
     private var settingsTitle: String {
         switch service.language {
@@ -290,46 +307,6 @@ struct TBDisplaySenderSettingsView: View {
         }
     }
 
-    private var generalTitle: String {
-        switch service.language {
-        case .italian: return "Generale"
-        case .english: return "General"
-        case .german: return "Allgemein"
-        case .french: return "Général"
-        case .chinese: return "通用"
-        }
-    }
-
-    private var interfaceTitle: String {
-        switch service.language {
-        case .italian: return "Interfaccia"
-        case .english: return "Interface"
-        case .german: return "Oberfläche"
-        case .french: return "Interface"
-        case .chinese: return "界面"
-        }
-    }
-
-    private var behaviorTitle: String {
-        switch service.language {
-        case .italian: return "Comportamento"
-        case .english: return "Behavior"
-        case .german: return "Verhalten"
-        case .french: return "Comportement"
-        case .chinese: return "行为"
-        }
-    }
-
-    private var aboutTitle: String {
-        switch service.language {
-        case .italian: return "About"
-        case .english: return "About"
-        case .german: return "Info"
-        case .french: return "À propos"
-        case .chinese: return "关于"
-        }
-    }
-
     private var aboutBody: String {
         switch service.language {
         case .italian: return "TargetBridge e una utility open source per riutilizzare pannelli iMac Intel come display esterni per Mac moderni. Le preferenze generali vivono qui; le impostazioni operative di ogni sessione restano nella finestra principale."
@@ -341,13 +318,7 @@ struct TBDisplaySenderSettingsView: View {
     }
 
     private var githubTitle: String {
-        switch service.language {
-        case .italian: return "GitHub"
-        case .english: return "GitHub"
-        case .german: return "GitHub"
-        case .french: return "GitHub"
-        case .chinese: return "GitHub"
-        }
+        "GitHub"
     }
 
     private var releaseTitle: String {
@@ -367,16 +338,6 @@ struct TBDisplaySenderSettingsView: View {
         case .german: return "Version"
         case .french: return "Version"
         case .chinese: return "版本"
-        }
-    }
-
-    private var addonsTitle: String {
-        switch service.language {
-        case .italian: return "Add-on"
-        case .english: return "Add-ons"
-        case .german: return "Add-ons"
-        case .french: return "Extensions"
-        case .chinese: return "附加组件"
         }
     }
 
@@ -437,26 +398,6 @@ struct TBDisplaySenderSettingsView: View {
         case .german: return "Beende alle Sitzungen, bevor du ein Add-on aktivierst oder deaktivierst."
         case .french: return "Arrêtez toutes les sessions avant d’activer ou de désactiver une extension."
         case .chinese: return "请先停止所有会话，再启用或禁用附加组件。"
-        }
-    }
-
-    private var addonEnabledTitle: String {
-        switch service.language {
-        case .italian: return "Attivo"
-        case .english: return "Enabled"
-        case .german: return "Aktiv"
-        case .french: return "Activée"
-        case .chinese: return "已启用"
-        }
-    }
-
-    private var addonDisabledTitle: String {
-        switch service.language {
-        case .italian: return "Disattivato"
-        case .english: return "Disabled"
-        case .german: return "Deaktiviert"
-        case .french: return "Désactivée"
-        case .chinese: return "已禁用"
         }
     }
 
@@ -527,21 +468,14 @@ struct TBDisplaySenderSettingsView: View {
 
     private func capabilityTitle(for capability: TBAddonCapability) -> String {
         switch (capability, service.language) {
-        case (.networkLink, .italian): return "Network Link"
-        case (.networkLink, .english): return "Network Link"
-        case (.networkLink, .german): return "Network Link"
-        case (.networkLink, .french): return "Network Link"
         case (.networkLink, .chinese): return "网络链路"
-        case (.audioRelay, .italian): return "Audio Relay"
-        case (.audioRelay, .english): return "Audio Relay"
-        case (.audioRelay, .german): return "Audio Relay"
+        case (.networkLink, _): return "Network Link"
         case (.audioRelay, .french): return "Relais audio"
         case (.audioRelay, .chinese): return "音频转发"
-        case (.inputDockstation, .italian): return "Input Dockstation"
-        case (.inputDockstation, .english): return "Input Dockstation"
-        case (.inputDockstation, .german): return "Input Dockstation"
+        case (.audioRelay, _): return "Audio Relay"
         case (.inputDockstation, .french): return "Station d’accueil des entrées"
         case (.inputDockstation, .chinese): return "输入扩展坞"
+        case (.inputDockstation, _): return "Input Dockstation"
         }
     }
 }

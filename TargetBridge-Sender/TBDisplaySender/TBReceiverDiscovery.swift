@@ -109,6 +109,232 @@ struct TBDiscoveredReceiver: Identifiable, Equatable {
     }
 }
 
+/// Per-receiver opt-in for automatic connection, persisted across launches.
+///
+/// Keyed by `TBDiscoveredReceiver.stableIdentity` (the Bonjour service name)
+/// rather than `id`: the link-local IP baked into `id` changes every time the
+/// Thunderbolt bridge comes back up, which is exactly the moment auto-connect
+/// has to recognise the receiver. This mirrors the keying rule already used for
+/// persisted per-receiver preferences (see `TBVirtualDisplayModeMemory`).
+///
+/// The whole set lives under one defaults key so the app can tell, at launch and
+/// without a discovery result in hand, whether auto-connect is armed at all.
+struct TBAutoConnectTrustStore {
+    static let defaultsKey = "fd.tbdisplaysender.autoConnect.trustedReceivers.v1"
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func load() -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.defaultsKey) ?? [])
+    }
+
+    func save(_ identities: Set<String>) {
+        if identities.isEmpty {
+            defaults.removeObject(forKey: Self.defaultsKey)
+        } else {
+            // Sorted so the stored value is stable and diffable.
+            defaults.set(identities.sorted(), forKey: Self.defaultsKey)
+        }
+    }
+
+    func isTrusted(identity: String) -> Bool {
+        load().contains(identity)
+    }
+
+    /// Applies the change and returns the resulting set, so the caller can
+    /// publish it without a second read.
+    @discardableResult
+    func setTrusted(_ trusted: Bool, identity: String) -> Set<String> {
+        var identities = load()
+        if trusted {
+            identities.insert(identity)
+        } else {
+            identities.remove(identity)
+        }
+        save(identities)
+        return identities
+    }
+}
+
+/// Decides *when* a trusted receiver seen over Bonjour should be connected to.
+///
+/// Bonjour re-announces the same service repeatedly, and a Thunderbolt link that
+/// is being plugged in (or a receiver that is waking) flaps in and out of the
+/// browse results for a few seconds. This gate turns that noisy sighting stream
+/// into at most one connect attempt per receiver per backoff window:
+///
+/// * **Settle** — a receiver must have been continuously visible for
+///   `settleInterval` before it is eligible, so a flap does not trigger a dial.
+/// * **Single flight** — one attempt at a time; nothing else is attempted until
+///   it succeeds or times out.
+/// * **Backoff** — each failed attempt blocks the receiver for an exponentially
+///   growing window, capped at `maximumBackoff`, instead of retrying in a loop.
+/// * **Absence grace** — a receiver has to stay gone for `absenceGrace` before
+///   its state is discarded, so a brief dropout neither restarts the settle
+///   clock nor forgets an accumulated backoff.
+/// * **User stop suppression** — after a manual Stop the receiver is suppressed
+///   until it genuinely disappears, otherwise auto-connect would immediately
+///   undo the user's Stop.
+///
+/// Pure value type with injected time so the policy can be unit tested without
+/// waiting on wall-clock or on Bonjour.
+struct TBAutoConnectGate {
+    struct Policy: Equatable {
+        /// Continuous visibility required before a receiver is eligible.
+        var settleInterval: TimeInterval = 2
+        /// How long a receiver must be missing before its state is forgotten.
+        var absenceGrace: TimeInterval = 8
+        /// How long an in-flight attempt blocks further attempts. Must exceed the
+        /// session's own 5 s connect watchdog so the session has already torn a
+        /// failed dial down by the time this expires.
+        var attemptTimeout: TimeInterval = 15
+        var initialBackoff: TimeInterval = 10
+        var maximumBackoff: TimeInterval = 300
+        var backoffMultiplier: Double = 2
+
+        static let `default` = Policy()
+    }
+
+    struct Attempt: Equatable {
+        let identity: String
+        let deadline: Date
+    }
+
+    private struct ReceiverState {
+        var firstSeenAt: Date?
+        var absentSince: Date?
+        var failureCount = 0
+        var blockedUntil: Date?
+        var userSuppressed = false
+    }
+
+    let policy: Policy
+    private var states: [String: ReceiverState] = [:]
+    private(set) var attemptInFlight: Attempt?
+
+    init(policy: Policy = .default) {
+        self.policy = policy
+    }
+
+    /// Feed the current Bonjour browse result. Call this before `candidate`.
+    mutating func updateVisibility(_ visible: Set<String>, now: Date) {
+        for identity in visible {
+            var state = states[identity] ?? ReceiverState()
+            state.absentSince = nil
+            if state.firstSeenAt == nil {
+                state.firstSeenAt = now
+            }
+            states[identity] = state
+        }
+
+        // Snapshot the keys: the loop mutates `states`.
+        for identity in Array(states.keys) where !visible.contains(identity) {
+            guard var state = states[identity] else { continue }
+            guard let absentSince = state.absentSince else {
+                state.absentSince = now
+                states[identity] = state
+                continue
+            }
+            if now.timeIntervalSince(absentSince) >= policy.absenceGrace {
+                // Really gone (cable out, receiver quit). Forget everything —
+                // including any user-stop suppression — so plugging back in is
+                // an unambiguous "connect me again".
+                states.removeValue(forKey: identity)
+            }
+        }
+    }
+
+    /// The first receiver in `trustedVisible` (caller's preference order) that is
+    /// settled, unsuppressed and out of backoff. Returns nil while an attempt is
+    /// in flight.
+    func candidate(from trustedVisible: [String], now: Date) -> String? {
+        guard attemptInFlight == nil else { return nil }
+        return trustedVisible.first { identity in
+            guard let state = states[identity] else { return false }
+            guard !state.userSuppressed, state.absentSince == nil else { return false }
+            guard let firstSeenAt = state.firstSeenAt,
+                  now.timeIntervalSince(firstSeenAt) >= policy.settleInterval
+            else { return false }
+            if let blockedUntil = state.blockedUntil, now < blockedUntil { return false }
+            return true
+        }
+    }
+
+    mutating func beginAttempt(identity: String, now: Date) {
+        attemptInFlight = Attempt(
+            identity: identity,
+            deadline: now.addingTimeInterval(policy.attemptTimeout)
+        )
+    }
+
+    /// The in-flight attempt if it has run out of time, otherwise nil.
+    func timedOutAttempt(now: Date) -> Attempt? {
+        guard let attempt = attemptInFlight, now >= attempt.deadline else { return nil }
+        return attempt
+    }
+
+    mutating func noteSuccess() {
+        guard let attempt = attemptInFlight else { return }
+        attemptInFlight = nil
+        states[attempt.identity]?.failureCount = 0
+        states[attempt.identity]?.blockedUntil = nil
+    }
+
+    mutating func noteFailure(now: Date) {
+        guard let attempt = attemptInFlight else { return }
+        attemptInFlight = nil
+        var state = states[attempt.identity] ?? ReceiverState()
+        state.failureCount += 1
+        state.blockedUntil = now.addingTimeInterval(backoff(afterFailures: state.failureCount))
+        states[attempt.identity] = state
+    }
+
+    /// The user pressed Stop. Hold off until this receiver actually disappears.
+    mutating func noteUserStopped(identity: String) {
+        var state = states[identity] ?? ReceiverState()
+        state.userSuppressed = true
+        states[identity] = state
+        if attemptInFlight?.identity == identity {
+            attemptInFlight = nil
+        }
+    }
+
+    /// Explicit opt-in: clear backoff and suppression and treat the receiver as
+    /// already settled, so turning the toggle on connects promptly instead of
+    /// waiting out another settle window.
+    mutating func arm(identity: String, now: Date) {
+        var state = states[identity] ?? ReceiverState()
+        state.firstSeenAt = now.addingTimeInterval(-policy.settleInterval)
+        state.absentSince = nil
+        state.failureCount = 0
+        state.blockedUntil = nil
+        state.userSuppressed = false
+        states[identity] = state
+    }
+
+    mutating func forget(identity: String) {
+        states.removeValue(forKey: identity)
+        if attemptInFlight?.identity == identity {
+            attemptInFlight = nil
+        }
+    }
+
+    func backoff(afterFailures failures: Int) -> TimeInterval {
+        guard failures > 0 else { return 0 }
+        let raw = policy.initialBackoff * pow(policy.backoffMultiplier, Double(failures - 1))
+        return min(policy.maximumBackoff, raw)
+    }
+
+    // Test seams.
+    func isSuppressed(identity: String) -> Bool { states[identity]?.userSuppressed ?? false }
+    func failureCount(identity: String) -> Int { states[identity]?.failureCount ?? 0 }
+    func isTracking(identity: String) -> Bool { states[identity] != nil }
+}
+
 final class TBReceiverDiscovery: NSObject, ObservableObject {
     @Published private(set) var receivers: [TBDiscoveredReceiver] = []
 
