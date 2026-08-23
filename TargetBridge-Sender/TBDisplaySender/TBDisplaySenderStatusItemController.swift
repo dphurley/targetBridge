@@ -93,8 +93,47 @@ final class TBDisplaySenderStatusItemController: NSObject {
     }
 
     private func refreshStatusItem() {
-        guard let item = statusItem else { return }
-        item.button?.toolTip = TBDisplaySenderL10n.topBarToolTip(service.language)
+        guard let item = statusItem, let button = item.button else { return }
+        button.toolTip = statusItemToolTip()
+
+        // The whole point of reporting the receiver's battery is that the
+        // receiver hides its own menu bar when it goes fullscreen. Burying the
+        // number one click into this menu would only half-solve that, so when a
+        // connected receiver has a battery it goes on the menu bar itself.
+        guard let battery = frontmostReceiverBattery() else {
+            button.image = NSImage(systemSymbolName: "display.2", accessibilityDescription: "TargetBridge")
+            button.imagePosition = .imageOnly
+            button.attributedTitle = NSAttributedString(string: "")
+            return
+        }
+
+        button.image = NSImage(systemSymbolName: battery.symbolName, accessibilityDescription: nil)
+        button.imagePosition = .imageLeading
+        // Monospaced digits: without them the item resizes as the level ticks
+        // between two- and three-digit values, nudging everything to its left.
+        button.attributedTitle = NSAttributedString(
+            string: " \(battery.percentage)%",
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: battery.needsAttention ? NSColor.systemRed : NSColor.labelColor
+            ]
+        )
+    }
+
+    /// Battery of the receiver worth surfacing: the first connected session
+    /// reporting one. Desktop receivers and not-yet-reported sessions are
+    /// skipped rather than shown as 0%.
+    private func frontmostReceiverBattery() -> TBReceiverBatteryState? {
+        for session in service.sessions where session.isConnected || session.isStreaming {
+            if let battery = TBPendingIntegration.batteryState(for: session) { return battery }
+        }
+        return nil
+    }
+
+    private func statusItemToolTip() -> String {
+        let base = TBDisplaySenderL10n.topBarToolTip(service.language)
+        guard let battery = frontmostReceiverBattery() else { return base }
+        return "\(base)\n\(batteryMenuTitle(battery))"
     }
 
     private func rebuildMenuItems(in menu: NSMenu) {
