@@ -1628,6 +1628,7 @@ struct tb_panel_geometry {
     uint32_t mode_h;
     double   width_mm;
     double   height_mm;
+    double   height_mm_scale;
     int      hidpi;
 };
 
@@ -1679,14 +1680,40 @@ static int tb_probe_panel_geometry(int sdl_display_index, struct tb_panel_geomet
         px_h = pt_h;
     }
 
-    out->panel_w = (uint32_t)px_w;
-    out->panel_h = (uint32_t)px_h;
-    out->mode_w  = (uint32_t)pt_w;
-    out->mode_h  = (uint32_t)pt_h;
+    /* Advertise the area we can actually draw into, not the whole panel.
+     * SDL_WINDOW_FULLSCREEN_DESKTOP sizes the window to the *usable* bounds,
+     * which exclude the menu bar, so the renderer drawable comes out shorter
+     * than the panel framebuffer. Advertising the panel made the sender build a
+     * virtual display whose backing store was taller than our drawable, and
+     * every frame was then rescaled by a non-integer factor on blit - soft
+     * text, while every dimension in the logs still looked correct.
+     *
+     * Sizing the virtual display to the usable area instead makes the sender's
+     * framebuffer, the captured frame and our drawable all identical. */
+    SDL_Rect usable;
+    int scale = (int)(px_w / pt_w);
+    if (scale >= 1 && SDL_GetDisplayUsableBounds(sdl_display_index, &usable) == 0 &&
+        usable.w > 0 && usable.h > 0 &&
+        (size_t)usable.w <= pt_w && (size_t)usable.h <= pt_h) {
+        out->mode_w = (uint32_t)usable.w;
+        out->mode_h = (uint32_t)usable.h;
+        /* Scaling points keeps the backing store even on the HiDPI path; the
+         * mask covers the 1x path, where the encoder still needs even sides. */
+        out->panel_w = (uint32_t)(usable.w * scale) & ~1u;
+        out->panel_h = (uint32_t)(usable.h * scale) & ~1u;
+        /* Keep the declared physical size proportional so DPI stays honest. */
+        out->height_mm_scale = (double)usable.h / (double)pt_h;
+    } else {
+        out->mode_w  = (uint32_t)pt_w;
+        out->mode_h  = (uint32_t)pt_h;
+        out->panel_w = (uint32_t)px_w;
+        out->panel_h = (uint32_t)px_h;
+        out->height_mm_scale = 1.0;
+    }
 
     CGSize mm = CGDisplayScreenSize(did);
     out->width_mm  = mm.width;
-    out->height_mm = mm.height;
+    out->height_mm = mm.height * out->height_mm_scale;
     return 0;
 }
 
@@ -1701,7 +1728,7 @@ static void send_receiver_info(struct app *a) {
         fprintf(stderr, "[main] panel probe failed; assuming 5K iMac geometry\n");
         geom.panel_w = 5120; geom.panel_h = 2880;
         geom.mode_w  = 2560; geom.mode_h  = 1440;
-        geom.width_mm = 596.7; geom.height_mm = 335.7;
+        geom.width_mm = 596.7; geom.height_mm = 335.7; geom.height_mm_scale = 1.0;
         geom.hidpi = 1;
     }
 
