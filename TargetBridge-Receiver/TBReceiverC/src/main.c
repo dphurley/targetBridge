@@ -27,6 +27,10 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreAudio/CoreAudio.h>
+/* IOKit's power-source API is plain C (CF types only), so reading the battery
+ * here does not break this file's no-Objective-C rule. */
+#include <IOKit/ps/IOPowerSources.h>
+#include <IOKit/ps/IOPSKeys.h>
 
 /* kAudioObjectPropertyElementMain is the macOS 12+ SDK spelling; older SDKs
  * only define kAudioObjectPropertyElementMaster (both are numerically 0). */
@@ -71,6 +75,16 @@ struct app {
     int      reported_night_shift;
     int      reported_true_tone;
     uint64_t last_tweak_poll_ms;
+
+    /* Last battery state reported to the sender. The receiver hides its menu
+     * bar in fullscreen, so the sender is the only place the user can see this.
+     * -1 = nothing sent yet this session. */
+    int      reported_battery_present;
+    int      reported_battery_percent;
+    int      reported_battery_charging;
+    int      reported_battery_minutes;
+    uint64_t last_battery_poll_ms;
+    uint64_t last_battery_send_ms;
 
     uint64_t last_recv_ms;      /* idle watchdog: last time the sender sent anything */
     int      close_requested;
@@ -203,6 +217,7 @@ static int tb_receiver_get_clipboard_text(char *dest, size_t size);
 static void tb_receiver_send_clipboard_if_changed(struct app *a);
 static void write_be32(uint8_t *dst, uint32_t value);
 static void tb_receiver_send_display_tweaks_if_changed(struct app *a);
+static void tb_receiver_send_battery_if_changed(struct app *a);
 
 static int tb_receiver_is_valid_language_pref(const char *language_pref) {
     return language_pref &&
@@ -1729,6 +1744,132 @@ static void tb_receiver_send_display_tweaks_if_changed(struct app *a) {
     (void)send_all(a->client_fd, pkt, 5 + (size_t)len);
 }
 
+/* Snapshot of this Mac's internal battery. `present` is 0 on a desktop (Mac
+ * mini, iMac, Mac Studio), where IOKit reports no internal battery power
+ * source at all; `minutes` is -1 whenever macOS has not settled on an
+ * estimate yet (right after a charger is plugged or unplugged). */
+struct tb_battery_snapshot {
+    int present;
+    int percent;
+    int charging;
+    int minutes;
+};
+
+static int tb_cfnumber_int(CFDictionaryRef dict, CFStringRef key, int fallback) {
+    CFNumberRef number = (CFNumberRef)CFDictionaryGetValue(dict, key);
+    if (!number || CFGetTypeID(number) != CFNumberGetTypeID()) return fallback;
+    int value = fallback;
+    if (!CFNumberGetValue(number, kCFNumberIntType, &value)) return fallback;
+    return value;
+}
+
+static int tb_cfboolean_int(CFDictionaryRef dict, CFStringRef key, int fallback) {
+    CFBooleanRef flag = (CFBooleanRef)CFDictionaryGetValue(dict, key);
+    if (!flag || CFGetTypeID(flag) != CFBooleanGetTypeID()) return fallback;
+    return CFBooleanGetValue(flag) ? 1 : 0;
+}
+
+static void tb_receiver_read_battery(struct tb_battery_snapshot *out) {
+    out->present = 0;
+    out->percent = 0;
+    out->charging = 0;
+    out->minutes = -1;
+
+    CFTypeRef blob = IOPSCopyPowerSourcesInfo();
+    if (!blob) return;
+    CFArrayRef sources = IOPSCopyPowerSourcesList(blob);
+    if (!sources) {
+        CFRelease(blob);
+        return;
+    }
+
+    const CFIndex count = CFArrayGetCount(sources);
+    for (CFIndex i = 0; i < count; i++) {
+        CFDictionaryRef desc = IOPSGetPowerSourceDescription(blob, CFArrayGetValueAtIndex(sources, i));
+        if (!desc) continue;
+
+        /* UPSes and Bluetooth peripherals also show up here; only the built-in
+         * battery is the receiver's own charge level. */
+        CFStringRef type = (CFStringRef)CFDictionaryGetValue(desc, CFSTR(kIOPSTypeKey));
+        if (!type || CFGetTypeID(type) != CFStringGetTypeID()) continue;
+        if (CFStringCompare(type, CFSTR(kIOPSInternalBatteryType), 0) != kCFCompareEqualTo) continue;
+        if (!tb_cfboolean_int(desc, CFSTR(kIOPSIsPresentKey), 1)) continue;
+
+        const int current = tb_cfnumber_int(desc, CFSTR(kIOPSCurrentCapacityKey), -1);
+        const int max = tb_cfnumber_int(desc, CFSTR(kIOPSMaxCapacityKey), 100);
+        if (current < 0 || max <= 0) continue;
+
+        out->present = 1;
+        int percent = (int)(((long)current * 100 + max / 2) / max);
+        if (percent < 0) percent = 0;
+        if (percent > 100) percent = 100;
+        out->percent = percent;
+        out->charging = tb_cfboolean_int(desc, CFSTR(kIOPSIsChargingKey), 0);
+
+        /* Both keys are -1 ("still calculating") for a while after a power
+         * transition, and the irrelevant one of the pair is always -1. */
+        const int minutes = out->charging
+            ? tb_cfnumber_int(desc, CFSTR(kIOPSTimeToFullChargeKey), -1)
+            : tb_cfnumber_int(desc, CFSTR(kIOPSTimeToEmptyKey), -1);
+        out->minutes = minutes > 0 ? minutes : -1;
+        break;
+    }
+
+    CFRelease(sources);
+    CFRelease(blob);
+}
+
+/* How often a battery report is re-sent even when nothing changed. Charge
+ * moves slowly, so this exists only so the sender's readout cannot be left
+ * stale by a dropped update. */
+#define TB_BATTERY_REFRESH_MS 30000
+
+/* Push the receiver's battery to the sender on change, plus a slow keepalive.
+ * Mirrors tb_receiver_send_display_tweaks_if_changed. */
+static void tb_receiver_send_battery_if_changed(struct app *a) {
+    if (a->client_fd < 0) return;
+
+    struct tb_battery_snapshot bat;
+    tb_receiver_read_battery(&bat);
+
+    const int unchanged = bat.present == a->reported_battery_present &&
+                          bat.percent == a->reported_battery_percent &&
+                          bat.charging == a->reported_battery_charging &&
+                          bat.minutes == a->reported_battery_minutes;
+    const uint64_t now = now_ms();
+    if (unchanged && now - a->last_battery_send_ms < TB_BATTERY_REFRESH_MS) return;
+
+    a->reported_battery_present = bat.present;
+    a->reported_battery_percent = bat.percent;
+    a->reported_battery_charging = bat.charging;
+    a->reported_battery_minutes = bat.minutes;
+    a->last_battery_send_ms = now;
+
+    char json[192];
+    int len;
+    if (bat.minutes > 0) {
+        len = snprintf(json, sizeof(json),
+                       "{\"isPresent\":%s,\"percentage\":%d,\"isCharging\":%s,\"minutesRemaining\":%d}",
+                       bat.present ? "true" : "false",
+                       bat.percent,
+                       bat.charging ? "true" : "false",
+                       bat.minutes);
+    } else {
+        len = snprintf(json, sizeof(json),
+                       "{\"isPresent\":%s,\"percentage\":%d,\"isCharging\":%s}",
+                       bat.present ? "true" : "false",
+                       bat.percent,
+                       bat.charging ? "true" : "false");
+    }
+    if (len <= 0 || (size_t)len >= sizeof(json)) return;
+
+    uint8_t pkt[4 + 1 + sizeof(json)];
+    write_be32(pkt, (uint32_t)(1 + len));
+    pkt[4] = TB_PKT_BATTERY;
+    memcpy(pkt + 5, json, (size_t)len);
+    (void)send_all(a->client_fd, pkt, 5 + (size_t)len);
+}
+
 /* Geometry of the physical panel the receiver window lives on.
  *
  * `panel_*` is the HiDPI backing store in pixels and `mode_*` the logical
@@ -2156,6 +2297,11 @@ int main(int argc, char **argv) {
                 a.session_active = 0;
                 a.reported_night_shift = -1;   /* force one report per session */
                 a.reported_true_tone = -1;
+                a.reported_battery_present = -1;
+                a.reported_battery_percent = -1;
+                a.reported_battery_charging = -1;
+                a.reported_battery_minutes = -2; /* -1 is a real value here */
+                a.last_battery_poll_ms = 0;
                 a.last_recv_ms = t;
                 SDL_DisableScreenSaver();
                 fprintf(stderr, "[main] client connected\n");
@@ -2196,6 +2342,13 @@ int main(int argc, char **argv) {
         if (t - a.last_tweak_poll_ms >= 500) {
             a.last_tweak_poll_ms = t;
             tb_receiver_send_display_tweaks_if_changed(&a);
+        }
+
+        /* Battery moves in whole percent steps over minutes; polling IOKit
+         * every 5s is already far finer-grained than the data changes. */
+        if (t - a.last_battery_poll_ms >= 5000) {
+            a.last_battery_poll_ms = t;
+            tb_receiver_send_battery_if_changed(&a);
         }
 
         if (a.client_fd < 0 || !a.session_active) {
