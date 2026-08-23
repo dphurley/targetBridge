@@ -85,12 +85,14 @@ final class TBSenderAutomationParsingTests: XCTestCase {
     func testExperimental5K60UsesIndependent60FPSHEVCSettings() {
         let preset = TBDisplayCapturePreset.native5k60Experimental
 
-        XCTAssertEqual(preset.width, 5120)
-        XCTAssertEqual(preset.height, 2880)
+        let size = TBCaptureSize(width: 5120, height: 2880)
+
+        XCTAssertEqual(preset.fixedSize, size)
+        XCTAssertEqual(preset.captureSize(for: nil), size)
         XCTAssertEqual(preset.expectedFrameRate, 60)
         XCTAssertEqual(preset.virtualDisplayRefreshRate, 60)
         XCTAssertEqual(preset.codecName, "HEVC")
-        XCTAssertEqual(preset.averageBitRate, 150_000_000)
+        XCTAssertEqual(preset.averageBitRate(for: size), 150_000_000)
     }
 
     // MARK: - matches (receiver selection for --receiver <value>)

@@ -571,6 +571,8 @@ extension TBDisplayCapturePreset {
             return TBDisplaySenderL10n.text("sender.profile.native_5k", language)
         case .native5k60Experimental:
             return TBDisplaySenderL10n.text("sender.profile.native_5k_60_experimental", language)
+        case .matchReceiver:
+            return TBDisplaySenderL10n.text("sender.profile.match_receiver", language)
         }
     }
 }

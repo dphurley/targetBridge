@@ -138,6 +138,7 @@
   "sender.profile.crisp": "Net",
   "sender.profile.native_5k": "5K",
   "sender.profile.native_5k_60_experimental": "5K 60 (Expérimental)",
+  "sender.profile.match_receiver": "Natif",
   "sender.capture_display.na": "n/d",
   "sender.capture_display.scdisplay": "SCDisplay %{id}",
   "sender.capture_display.cgdisplaystream": "CGDisplayStream %{id}",
