@@ -76,26 +76,36 @@ final class ReceiverBackedVirtualDisplaySession {
         destroy()
         let preferredRefreshRate = refreshRate ?? profile.refreshRate
 
-        // The receiver hard-codes mode 2560x1440 + hiDPI, i.e. a 5120x2880 backing
-        // store, regardless of which capture preset the sender is running. Any preset
-        // below 5K therefore makes ScreenCaptureKit resample 5120x2880 down to the
-        // stream size, and the receiver resample back up to the panel: two non-integer
-        // passes. `modeOverride` lets the sender size the backing store to match the
-        // stream exactly, so capture is 1:1 and only the panel-side scale remains.
+        // `profile.modeWidth/Height` is the receiver's own logical desktop and
+        // `panelWidth/Height` its HiDPI backing store, so the default mode below
+        // reproduces the receiver's native geometry exactly. `modeOverride` lets
+        // the sender instead size the backing store to the capture preset, so
+        // capture is 1:1 and only the panel-side scale remains.
         var resolvedMode = modeOverride ?? TBVirtualDisplayModeSize(
             width: profile.modeWidth,
             height: profile.modeHeight
         )
 
-        // macOS refuses a HiDPI mode whose backing store exceeds the advertised panel.
-        if resolvedMode.backingWidth > profile.panelWidth || resolvedMode.backingHeight > profile.panelHeight {
-            NSLog(
-                "TargetBridge: mode override %dx%d needs a %dx%d backing store, exceeds panel %dx%d; falling back to receiver profile",
-                resolvedMode.width, resolvedMode.height,
-                resolvedMode.backingWidth, resolvedMode.backingHeight,
-                profile.panelWidth, profile.panelHeight
+        // macOS refuses a HiDPI mode whose backing store exceeds the advertised
+        // panel. Clamp to the largest mode the panel can actually back — the
+        // previous fallback re-assigned the profile default, which is the value
+        // `resolvedMode` already holds whenever no override was supplied.
+        let requiredWidth = profile.hiDPI ? resolvedMode.backingWidth : resolvedMode.width
+        let requiredHeight = profile.hiDPI ? resolvedMode.backingHeight : resolvedMode.height
+        if requiredWidth > profile.panelWidth || requiredHeight > profile.panelHeight {
+            let scale = profile.hiDPI ? 2 : 1
+            let fitted = TBVirtualDisplayModeSize(
+                width: profile.panelWidth / scale,
+                height: profile.panelHeight / scale
             )
-            resolvedMode = TBVirtualDisplayModeSize(width: profile.modeWidth, height: profile.modeHeight)
+            NSLog(
+                "TargetBridge: mode %dx%d needs a %dx%d backing store, exceeds panel %dx%d; clamping to %dx%d",
+                resolvedMode.width, resolvedMode.height,
+                requiredWidth, requiredHeight,
+                profile.panelWidth, profile.panelHeight,
+                fitted.width, fitted.height
+            )
+            resolvedMode = fitted
         }
 
         let descriptor = CGVirtualDisplayDescriptor()
@@ -107,10 +117,13 @@ final class ReceiverBackedVirtualDisplaySession {
         descriptor.maxPixelsWide = UInt32(profile.panelWidth)
         descriptor.maxPixelsHigh = UInt32(profile.panelHeight)
 
-        let ppi = 218.0
+        // Prefer the receiver's real panel size. Receivers predating the
+        // dynamic-geometry change omit it, so fall back to the 27" 5K iMac
+        // density this originally hard-coded.
+        let fallbackPPI = 218.0
         descriptor.sizeInMillimeters = CGSize(
-            width: Double(profile.panelWidth) / ppi * 25.4,
-            height: Double(profile.panelHeight) / ppi * 25.4
+            width: profile.physicalWidthMM ?? (Double(profile.panelWidth) / fallbackPPI * 25.4),
+            height: profile.physicalHeightMM ?? (Double(profile.panelHeight) / fallbackPPI * 25.4)
         )
 
         guard let display = CGVirtualDisplay(descriptor: descriptor) else {

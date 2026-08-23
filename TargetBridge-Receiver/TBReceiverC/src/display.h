@@ -15,6 +15,7 @@ struct tb_display_info {
     uint32_t window_h;
     uint32_t drawable_w;
     uint32_t drawable_h;
+    int      display_index;
     char     name[128];
 };
 
