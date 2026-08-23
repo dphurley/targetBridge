@@ -1167,6 +1167,11 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     private var adoptingReportedTweaks = false
     @Published var receiverSupportsNightShift = false
     @Published var receiverSupportsTrueTone = false
+    /// The receiver's battery, as last reported by it. `nil` until the first
+    /// report arrives (and again after the session ends) — the receiver pushes
+    /// one immediately on connect, then on every change, plus a slow refresh.
+    /// A receiver with no battery reports `isPresent == false` rather than nil.
+    @Published var receiverBattery: TBReceiverBatteryState?
     var audioAddonAvailable = true
     var receiverSupportsHEVCDecodeHint: Bool?
     var receiverInputMonitoringTrustedHint: Bool?
@@ -1782,6 +1787,9 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         isStreaming = false
         isCableTesting = false
         isCableTestConnection = false
+        // Whatever the receiver last reported is now stale and unverifiable —
+        // better to show nothing than a charge level frozen at disconnect time.
+        receiverBattery = nil
         if let status {
             setStatus(status)
         }
@@ -2086,6 +2094,13 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
                 // receiver and the two could ping-pong.
                 if let tweaks = TBMonitorProtocol.decodeJSON(TBMonitorDisplayTweaks.self, from: payload) {
                     applyReportedDisplayTweaks(tweaks)
+                }
+            case .receiverBattery:
+                if let report = TBMonitorProtocol.decodeJSON(TBMonitorReceiverBattery.self, from: payload) {
+                    let state = TBReceiverBatteryState(report: report)
+                    if receiverBattery != state {
+                        receiverBattery = state
+                    }
                 }
             case .clipboard:
                 if let clipboard = TBMonitorProtocol.decodeJSON(TBMonitorClipboard.self, from: payload) {

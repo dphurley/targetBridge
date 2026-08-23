@@ -306,4 +306,106 @@ final class TBMonitorProtocolTests: XCTestCase {
     func testInputEventEncoderParityExtremeValues() {
         assertEncoderParity(makeEvent(kind: "move", dx: Int.min, dy: Int.max))
     }
+
+    // MARK: - Receiver battery (packet 0x39)
+
+    /// Decodes a payload exactly as `drainPacketsOrThrow` does, from the raw
+    /// JSON the receiver's `snprintf` emits — so these tests fail if either end
+    /// changes a field name.
+    private func decodeBattery(_ json: String,
+                               file: StaticString = #filePath,
+                               line: UInt = #line) -> TBReceiverBatteryState? {
+        let packet = TBMonitorProtocol.makePacket(type: .receiverBattery, payload: Data(json.utf8))
+        var buffer = packet
+        guard let (type, payload) = try? TBMonitorProtocol.drainPacket(from: &buffer) else {
+            XCTFail("battery packet did not drain", file: file, line: line)
+            return nil
+        }
+        XCTAssertEqual(type, .receiverBattery, file: file, line: line)
+        guard let report = TBMonitorProtocol.decodeJSON(TBMonitorReceiverBattery.self, from: payload) else {
+            XCTFail("payload did not decode as TBMonitorReceiverBattery: \(json)", file: file, line: line)
+            return nil
+        }
+        return TBReceiverBatteryState(report: report)
+    }
+
+    func testReceiverBatteryPacketTypeIs0x39() {
+        XCTAssertEqual(TBMonitorPacketType.receiverBattery.rawValue, 0x39)
+        XCTAssertEqual(TBMonitorPacketType(rawValue: 0x39), .receiverBattery)
+    }
+
+    func testBatteryDischargingWithEstimate() {
+        let state = decodeBattery(#"{"isPresent":true,"percentage":72,"isCharging":false,"minutesRemaining":214}"#)
+        XCTAssertEqual(state, TBReceiverBatteryState(report: TBMonitorReceiverBattery(
+            isPresent: true, percentage: 72, isCharging: false, minutesRemaining: 214
+        )))
+        XCTAssertEqual(state?.percentage, 72)
+        XCTAssertEqual(state?.isCharging, false)
+        XCTAssertEqual(state?.minutesRemaining, 214)
+    }
+
+    func testBatteryChargingWithoutEstimateOmitsMinutes() {
+        // The receiver drops minutesRemaining entirely while macOS is still
+        // calculating; that must decode as "unknown", not as a zero estimate.
+        let state = decodeBattery(#"{"isPresent":true,"percentage":14,"isCharging":true}"#)
+        XCTAssertEqual(state?.isPresent, true)
+        XCTAssertEqual(state?.percentage, 14)
+        XCTAssertEqual(state?.isCharging, true)
+        XCTAssertNil(state?.minutesRemaining)
+    }
+
+    /// A desktop receiver (Mac mini, iMac, Mac Studio) has no internal battery.
+    func testBatteryAbsentOnDesktopReceiver() {
+        let state = decodeBattery(#"{"isPresent":false,"percentage":0,"isCharging":false}"#)
+        XCTAssertEqual(state?.isPresent, false)
+        XCTAssertEqual(state?.percentage, 0)
+        XCTAssertNil(state?.minutesRemaining)
+    }
+
+    /// Forward compatibility: unknown fields from a newer receiver are ignored
+    /// rather than failing the whole decode.
+    func testBatteryIgnoresUnknownFields() {
+        let state = decodeBattery(#"{"isPresent":true,"percentage":55,"isCharging":false,"cycleCount":312,"health":"Good"}"#)
+        XCTAssertEqual(state?.percentage, 55)
+        XCTAssertEqual(state?.isPresent, true)
+    }
+
+    /// Backward compatibility: a report missing fields still yields a usable
+    /// state instead of nil.
+    func testBatteryMissingFieldsFallBackToAbsent() {
+        let state = decodeBattery("{}")
+        XCTAssertEqual(state, TBReceiverBatteryState(report: TBMonitorReceiverBattery()))
+        XCTAssertEqual(state?.isPresent, false)
+        XCTAssertEqual(state?.percentage, 0)
+        XCTAssertEqual(state?.isCharging, false)
+        XCTAssertNil(state?.minutesRemaining)
+    }
+
+    func testBatteryPercentageIsClamped() {
+        XCTAssertEqual(decodeBattery(#"{"isPresent":true,"percentage":140}"#)?.percentage, 100)
+        XCTAssertEqual(decodeBattery(#"{"isPresent":true,"percentage":-7}"#)?.percentage, 0)
+    }
+
+    func testBatteryNonPositiveMinutesTreatedAsUnknown() {
+        // IOKit reports -1 for "still calculating"; it must never surface as a
+        // negative or zero time remaining.
+        XCTAssertNil(decodeBattery(#"{"isPresent":true,"percentage":50,"minutesRemaining":-1}"#)?.minutesRemaining)
+        XCTAssertNil(decodeBattery(#"{"isPresent":true,"percentage":50,"minutesRemaining":0}"#)?.minutesRemaining)
+    }
+
+    /// An unrecognized packet type must not stall the battery packet queued
+    /// behind it — the sender is the only place this state is visible.
+    func testBatteryPacketSurvivesUnknownPrecedingPacket() {
+        var buffer = Data()
+        TBMonitorProtocol.appendBE32(&buffer, 2)
+        buffer.append(0x7F)  // unknown type
+        buffer.append(0x00)
+        buffer.append(TBMonitorProtocol.makePacket(
+            type: .receiverBattery,
+            payload: Data(#"{"isPresent":true,"percentage":91,"isCharging":true}"#.utf8)
+        ))
+
+        let drained = try? TBMonitorProtocol.drainPacket(from: &buffer)
+        XCTAssertEqual(drained?.0, .receiverBattery)
+    }
 }
