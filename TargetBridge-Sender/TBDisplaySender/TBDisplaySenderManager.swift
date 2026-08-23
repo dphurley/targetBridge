@@ -102,6 +102,14 @@ final class TBDisplaySenderService: ObservableObject {
             objectWillChange.send()
         }
     }
+    /// Bonjour identities (`TBDiscoveredReceiver.stableIdentity`) the user has
+    /// marked as "connect to this automatically". Published so a toggle bound to
+    /// `isAutoConnectEnabled(for:)` re-renders when it changes.
+    @Published private(set) var autoConnectTrustedIdentities: Set<String> = []
+    /// `TBDiscoveredReceiver.id` of the receiver an automatic connect is
+    /// currently being attempted for, or nil when nothing is in flight.
+    @Published private(set) var autoConnectingReceiverID: String?
+
     private var userQuitPending = false
     private var sessionCancellables: [UUID: AnyCancellable] = [:]
     private let receiverDiscovery = TBReceiverDiscovery()
@@ -112,13 +120,18 @@ final class TBDisplaySenderService: ObservableObject {
     private var activationObserver: NSObjectProtocol?
     private var clipboardTimer: Timer?
     private var lastClipboardChangeCount: Int = NSPasteboard.general.changeCount
+    private let autoConnectTrustStore = TBAutoConnectTrustStore()
+    private var autoConnectGate = TBAutoConnectGate()
+    private var autoConnectTimer: Timer?
 
     private init() {
+        autoConnectTrustedIdentities = autoConnectTrustStore.load()
         discoveryCancellable = receiverDiscovery.$receivers.sink { [weak self] receivers in
             guard let self else { return }
             discoveredReceivers = receivers
             reconcileDiscoveredReceivers(receivers)
             pushLanguageUpdateToDiscoveredReceivers()
+            evaluateAutoConnect()
             objectWillChange.send()
         }
         addonCancellable = addonStore.$addons.sink { [weak self] addons in
@@ -131,6 +144,7 @@ final class TBDisplaySenderService: ObservableObject {
         addonStore.refresh()
         restorePersistedSessions()
         startClipboardMonitoring()
+        updateAutoConnectTimer()
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -464,6 +478,143 @@ final class TBDisplaySenderService: ObservableObject {
         session.brightness = config.brightness
         session.volume = config.volume ?? 0.5
         session.matchRenderToStream = config.matchRenderToStream ?? false
+    }
+
+    // MARK: - Auto-connect
+
+    /// Whether this receiver is trusted for automatic connection. Bind a toggle
+    /// to this plus `setAutoConnectEnabled(_:for:)`.
+    func isAutoConnectEnabled(for receiver: TBDiscoveredReceiver) -> Bool {
+        autoConnectTrustedIdentities.contains(receiver.stableIdentity)
+    }
+
+    func setAutoConnectEnabled(_ enabled: Bool, for receiver: TBDiscoveredReceiver) {
+        let identity = receiver.stableIdentity
+        let updated = autoConnectTrustStore.setTrusted(enabled, identity: identity)
+        guard updated != autoConnectTrustedIdentities else { return }
+        autoConnectTrustedIdentities = updated
+        if enabled {
+            // Opting in is an explicit "connect me": drop any leftover backoff or
+            // user-stop suppression instead of making the user wait it out.
+            autoConnectGate.arm(identity: identity, now: Date())
+        } else {
+            autoConnectGate.forget(identity: identity)
+            if autoConnectingReceiverID == receiver.id {
+                autoConnectingReceiverID = nil
+            }
+        }
+        updateAutoConnectTimer()
+        evaluateAutoConnect()
+        objectWillChange.send()
+    }
+
+    func toggleAutoConnect(for receiver: TBDiscoveredReceiver) {
+        setAutoConnectEnabled(!isAutoConnectEnabled(for: receiver), for: receiver)
+    }
+
+    /// True while an automatic connect to this receiver is in flight.
+    func isAutoConnecting(_ receiver: TBDiscoveredReceiver) -> Bool {
+        autoConnectingReceiverID == receiver.id
+    }
+
+    /// A session was stopped by the user. Suppress auto-connect for whichever
+    /// receiver it was pointed at until that receiver actually disappears —
+    /// otherwise auto-connect would undo the Stop a second later.
+    func noteUserStoppedSession(_ session: TBDisplaySenderSession) {
+        guard let identity = autoConnectIdentity(for: session) else { return }
+        autoConnectGate.noteUserStopped(identity: identity)
+        autoConnectingReceiverID = nil
+    }
+
+    private func autoConnectIdentity(for session: TBDisplaySenderSession) -> String? {
+        if let receiver = discoveredReceivers.first(where: { $0.id == session.selectedReceiverID }) {
+            return receiver.stableIdentity
+        }
+        let address = session.receiverIP.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty else { return nil }
+        return discoveredReceivers
+            .first(where: { TBSenderAutomation.matches(address, $0) })?
+            .stableIdentity
+    }
+
+    /// A 1 Hz tick is what lets the settle window and the backoff window expire
+    /// on their own; Bonjour is not guaranteed to re-announce at the right
+    /// moment. It only runs while at least one receiver is actually trusted.
+    private func updateAutoConnectTimer() {
+        if autoConnectTrustedIdentities.isEmpty {
+            autoConnectTimer?.invalidate()
+            autoConnectTimer = nil
+            return
+        }
+        guard autoConnectTimer == nil else { return }
+        autoConnectTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.evaluateAutoConnect()
+            }
+        }
+    }
+
+    private func evaluateAutoConnect(now: Date = Date()) {
+        autoConnectGate.updateVisibility(
+            Set(discoveredReceivers.map(\.stableIdentity)),
+            now: now
+        )
+
+        // Resolve the attempt already running before considering a new one.
+        if autoConnectGate.attemptInFlight != nil {
+            if anyConnected {
+                autoConnectGate.noteSuccess()
+                autoConnectingReceiverID = nil
+            } else if let attempt = autoConnectGate.timedOutAttempt(now: now) {
+                // The session's own connect watchdog has already torn the failed
+                // dial down; all that is left is to back off before retrying.
+                autoConnectGate.noteFailure(now: now)
+                autoConnectingReceiverID = nil
+                TBLog.connection.warning(
+                    "auto-connect: attempt to \(attempt.identity, privacy: .public) did not become active; backing off"
+                )
+            }
+            return
+        }
+
+        autoConnectingReceiverID = nil
+        guard !autoConnectTrustedIdentities.isEmpty else { return }
+        // Idle only — never interrupt or hijack a live session or a cable test.
+        guard !anyConnected, !sessions.contains(where: { $0.isCableTesting }) else { return }
+
+        let trustedVisible = discoveredReceivers.filter {
+            autoConnectTrustedIdentities.contains($0.stableIdentity)
+        }
+        guard let identity = autoConnectGate.candidate(
+                from: trustedVisible.map(\.stableIdentity),
+                now: now
+              ),
+              let receiver = trustedVisible.first(where: { $0.stableIdentity == identity }),
+              let session = autoConnectTargetSession(for: receiver)
+        else { return }
+
+        autoConnectGate.beginAttempt(identity: identity, now: now)
+        autoConnectingReceiverID = receiver.id
+        TBLog.connection.info("auto-connect: connecting to \(receiver.displayText, privacy: .public)")
+
+        // Same path the Connect button and `targetbridge://connect` take:
+        // select the discovered receiver, let the service apply its address and
+        // remembered display profile, then dial.
+        session.selectedReceiverID = receiver.id
+        applyDiscoveredReceiver(receiver, to: session)
+        if session.localInterfaceIP.isEmpty {
+            session.localInterfaceIP = defaultLocalInterfaceIP(for: session.transportKind)
+        }
+        session.connect()
+        objectWillChange.send()
+    }
+
+    /// Prefer a session already pointed at this receiver, then any idle session.
+    private func autoConnectTargetSession(for receiver: TBDiscoveredReceiver) -> TBDisplaySenderSession? {
+        let idle = sessions.filter { !$0.isConnected && !$0.isStreaming && !$0.isCableTesting }
+        return idle.first(where: { $0.selectedReceiverID == receiver.id })
+            ?? idle.first(where: { $0.selectedReceiverID.hasPrefix("\(receiver.serviceName)|") })
+            ?? idle.first
     }
 
     func refreshLocalInterfaces() {
