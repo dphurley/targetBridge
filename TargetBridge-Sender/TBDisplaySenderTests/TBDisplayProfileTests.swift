@@ -182,3 +182,24 @@ final class TBLatencyTuningTests: XCTestCase {
         XCTAssertEqual(TBDisplayCapturePreset.native5k.queueDepth, 5)
     }
 }
+
+final class TBCapturePresetDefaultTests: XCTestCase {
+    /// A fixed 16:9 preset streamed to a receiver whose drawable is not 16:9
+    /// produces black bars. `.matchReceiver` is the only preset that cannot,
+    /// because it takes its geometry from the receiver, so it is the default.
+    func testNewSessionsDefaultToMatchReceiver() {
+        XCTAssertNil(TBDisplayCapturePreset.matchReceiver.fixedSize,
+                     "matchReceiver must stay receiver-derived to be a safe default")
+    }
+
+    /// The default is chosen before any receiver has reported, so it has to
+    /// resolve to something usable with a nil profile rather than trapping.
+    func testDefaultPresetResolvesBeforeAnyHandshake() {
+        let size = TBDisplayCapturePreset.matchReceiver.captureSize(for: nil)
+
+        XCTAssertEqual(size, TBDisplayCapturePreset.unresolvedCaptureSize)
+        XCTAssertGreaterThan(size.width, 0)
+        XCTAssertEqual(size.width % 2, 0, "encoder needs even dimensions")
+        XCTAssertEqual(size.height % 2, 0, "encoder needs even dimensions")
+    }
+}

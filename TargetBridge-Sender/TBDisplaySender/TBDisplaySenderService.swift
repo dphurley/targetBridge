@@ -1085,7 +1085,7 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         self.audioEnabled = audioEnabled
         self.verboseDisplayLogging = verboseDisplayLogging
         self.streamResolutionText = TBDisplaySenderL10n.streamSummary(
-            preset: .standard1440p,
+            preset: .matchReceiver,
             source: .desktopMirror,
             language: language
         )
@@ -1230,7 +1230,15 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
     /// downsample and the GPU cost of rendering pixels that get thrown away.
     @Published var matchRenderToStream: Bool = false
 
-    @Published var capturePreset: TBDisplayCapturePreset = .standard1440p {
+    /// Defaults to `.matchReceiver`: it is the only preset that streams at the
+    /// receiver's own geometry, so it is the only one that avoids resampling
+    /// and the black bars a mismatched aspect produces. Every fixed preset is
+    /// sized for a link that might stall, which a Thunderbolt bridge does not.
+    ///
+    /// Safe as a default despite depending on the receiver profile: before the
+    /// handshake `captureSize(for:)` falls back to 2560x1440, and every site
+    /// that configures capture or encoding runs after the profile has arrived.
+    @Published var capturePreset: TBDisplayCapturePreset = .matchReceiver {
         didSet {
             if !isStreaming {
                 streamResolutionText = TBDisplaySenderL10n.streamSummary(preset: capturePreset, source: captureSource, language: language)
