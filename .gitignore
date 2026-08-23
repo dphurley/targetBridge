@@ -20,3 +20,6 @@ tbreceiver
 # C test outputs
 test_net_parser
 *.dSYM/
+
+# Claude Code agent worktrees and session state
+.claude/

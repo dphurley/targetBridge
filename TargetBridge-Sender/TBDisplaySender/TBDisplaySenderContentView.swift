@@ -6,39 +6,41 @@ import SwiftUI
 // The views below are already laid out for them; these stubs are the single
 // place to wire them up.
 
-/// What the card and the menu bar need to know about the receiver's battery.
-/// The receiver hides its own menu bar while fullscreen, so this is the only
-/// place its charge is visible.
-struct TBReceiverBatteryState {
-    let percent: Int
-    let isCharging: Bool
-}
-
+/// Bridges the views to the receiver-battery and auto-connect features, which
+/// expose their state in shapes the view layer would otherwise have to know
+/// the internals of.
+///
+/// Main-actor isolated because both features publish from the service, which
+/// is. Every caller is a SwiftUI view body, so this costs nothing.
+@MainActor
 enum TBPendingIntegration {
-    /// INTEGRATION: receiver battery. Expected on `TBDisplaySenderSession`:
-    ///   `receiverBatteryPresent: Bool`, `receiverBatteryPercent: Int` (0–100),
-    ///   `receiverBatteryCharging: Bool`
-    /// Replace the body with:
-    ///   guard session.isConnected, session.receiverBatteryPresent else { return nil }
-    ///   return TBReceiverBatteryState(percent: session.receiverBatteryPercent,
-    ///                                 isCharging: session.receiverBatteryCharging)
-    /// Returning nil hides the battery readout everywhere, so the UI is correct
-    /// until it is wired.
+    /// The receiver's battery, or nil when there is nothing truthful to show.
+    ///
+    /// Three cases collapse to nil deliberately: no session, nothing reported
+    /// yet, and a receiver that reported it has no battery at all (a Mac mini
+    /// or Studio). Only the last is a positive statement, and the UI treatment
+    /// is the same for all three — show nothing.
     static func batteryState(for session: TBDisplaySenderSession) -> TBReceiverBatteryState? {
-        _ = session
-        return nil
+        guard let battery = session.receiverBattery, battery.isPresent else { return nil }
+        return battery
     }
 
-    /// INTEGRATION: per-receiver "connect automatically". Expected on
-    /// `TBDisplaySenderSession`: `connectsAutomatically: Bool` (persisted).
-    /// Replace the body with:
-    ///   Binding(get: { session.connectsAutomatically },
-    ///           set: { session.connectsAutomatically = $0 })
-    /// While this returns nil the toggle in the configuration sheet falls back
-    /// to view-local state: it renders and animates but does not persist.
+    /// Per-receiver "connect automatically".
+    ///
+    /// Auto-connect is keyed on the *discovered* receiver rather than the
+    /// session, because trust has to survive the session being reconfigured and
+    /// has to be evaluable before any session is pointed at it. A session
+    /// holding a hand-typed address therefore has nothing to bind to, and this
+    /// returns nil so the caller can hide the control rather than offer a
+    /// switch that silently forgets.
     static func autoConnectBinding(for session: TBDisplaySenderSession) -> Binding<Bool>? {
-        _ = session
-        return nil
+        let service = TBDisplaySenderService.shared
+        guard let receiver = service.discoveredReceivers.first(where: { $0.id == session.selectedReceiverID })
+        else { return nil }
+        return Binding(
+            get: { service.isAutoConnectEnabled(for: receiver) },
+            set: { service.setAutoConnectEnabled($0, for: receiver) }
+        )
     }
 }
 
@@ -420,7 +422,7 @@ private struct TBTargetCard: View {
             Image(systemName: batterySymbol(battery))
                 .font(.system(size: 11))
                 .foregroundStyle(battery.isCharging ? TBTheme.teal : TBTheme.textDim)
-            Text("\(battery.percent)%")
+            Text("\(battery.percentage)%")
                 .font(TBFont.mono(10))
                 .foregroundStyle(TBTheme.textSecondary)
             TBLabel(
@@ -434,7 +436,7 @@ private struct TBTargetCard: View {
 
     private func batterySymbol(_ battery: TBReceiverBatteryState) -> String {
         if battery.isCharging { return "battery.100percent.bolt" }
-        switch battery.percent {
+        switch battery.percentage {
         case ..<15: return "battery.0percent"
         case ..<40: return "battery.25percent"
         case ..<65: return "battery.50percent"
@@ -598,9 +600,6 @@ private struct TBSessionConfigurationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var tab: TBConfigurationTab = .connection
     @State private var configurationChecks: [TBConfigurationCheck] = []
-    /// Fallback storage until the auto-connect property lands on the session.
-    /// See TBPendingIntegration.autoConnectBinding.
-    @State private var autoConnectFallback = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -717,14 +716,19 @@ private struct TBSessionConfigurationSheet: View {
                     .disabled(session.isConnected || session.isStreaming)
             }
 
-            TBSettingRow(
-                label: service.language.str("sender.toggle.auto_connect"),
-                detail: service.language.str("sender.toggle.auto_connect_hint")
-            ) {
-                Toggle("", isOn: TBPendingIntegration.autoConnectBinding(for: session) ?? $autoConnectFallback)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(TBTheme.accent)
+            // Only offered for a receiver that came from discovery: trust is
+            // keyed on the discovered receiver, so a hand-typed address has
+            // nowhere to store it.
+            if let autoConnect = TBPendingIntegration.autoConnectBinding(for: session) {
+                TBSettingRow(
+                    label: service.language.str("sender.toggle.auto_connect"),
+                    detail: service.language.str("sender.toggle.auto_connect_hint")
+                ) {
+                    Toggle("", isOn: autoConnect)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(TBTheme.accent)
+                }
             }
 
             if !service.discoveredReceivers.isEmpty {

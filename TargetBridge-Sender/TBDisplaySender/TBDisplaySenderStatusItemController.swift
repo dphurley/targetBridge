@@ -311,7 +311,7 @@ final class TBDisplaySenderStatusItemController: NSObject {
             ? TBDisplaySenderL10n.text("sender.battery.charging", service.language)
             : TBDisplaySenderL10n.text("sender.battery.on_battery", service.language)
         let label = TBDisplaySenderL10n.text("sender.battery.label", service.language)
-        return "\(label): \(battery.percent)% · \(state)"
+        return "\(label): \(battery.percentage)% · \(state)"
     }
 
     private func onWord() -> String {
