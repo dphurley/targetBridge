@@ -1701,6 +1701,10 @@ final class TBDisplaySenderSession: NSObject, ObservableObject, Identifiable, @u
         completion: (@MainActor @Sendable () -> Void)? = nil
     ) {
         TBSenderAutomation.suspendAutomaticReconnectAfterUserStop()
+        // Stop must stay stopped: hold auto-connect off this receiver until it
+        // actually goes away, rather than letting the next Bonjour sighting
+        // reconnect a second later.
+        TBDisplaySenderService.shared.noteUserStoppedSession(self)
         stop(
             resetStatusTo: .stopped,
             persistArrangement: persistArrangement,
