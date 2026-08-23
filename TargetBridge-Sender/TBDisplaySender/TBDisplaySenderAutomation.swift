@@ -212,7 +212,10 @@ enum TBSenderAutomation {
                 service.applyDiscoveredReceiver(discovered, to: session)
             }
             session.selectedReceiverID = discovered.id
-        } else if let discovered = service.discoveredReceivers.first(where: { matches(receiver, $0) }) {
+        // Shorter budget than the `auto` path: a value that never matches is a
+        // legitimate raw IP / hostname, and that fallback should not be made to
+        // wait six seconds for a lookup that was never going to succeed.
+        } else if let discovered = await waitForReceiver(service, matching: receiver, ticks: 10) {
             if let pathPreference {
                 guard let selected = await selectConnectionPath(
                     receiver: discovered,
@@ -330,12 +333,31 @@ enum TBSenderAutomation {
     }
 
     /// Discovery is async (Bonjour); briefly wait for the first receiver to appear.
-    private static func waitForReceiver(_ service: TBDisplaySenderService) async -> TBDiscoveredReceiver? {
-        for _ in 0..<20 {
-            if let first = service.discoveredReceivers.first { return first }
+    /// Waits for discovery to produce a receiver.
+    ///
+    /// Polling is not optional here, for either caller. `connect` calls
+    /// `refreshLocalInterfaces()` first, which reaches
+    /// `TBReceiverDiscovery.refresh()` -> `stop()` -> `receivers = []`
+    /// *synchronously*. Any read of `discoveredReceivers` taken straight
+    /// afterwards therefore sees an empty list, however long the receiver has
+    /// actually been visible.
+    ///
+    /// - Parameter name: when non-nil, wait for a receiver matching this
+    ///   name/host/IP rather than simply the first one to appear.
+    private static func waitForReceiver(
+        _ service: TBDisplaySenderService,
+        matching name: String? = nil,
+        ticks: Int = 20
+    ) async -> TBDiscoveredReceiver? {
+        func pick() -> TBDiscoveredReceiver? {
+            guard let name else { return service.discoveredReceivers.first }
+            return service.discoveredReceivers.first(where: { matches(name, $0) })
+        }
+        for _ in 0..<ticks {
+            if let found = pick() { return found }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        return service.discoveredReceivers.first
+        return pick()
     }
 
     private static func selectConnectionPath(
