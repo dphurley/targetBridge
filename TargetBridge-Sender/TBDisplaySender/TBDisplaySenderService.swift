@@ -172,11 +172,17 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         case .standard1440p:
             return 3
         case .smooth1440p60, .smooth1800p60, .crisp2160p60, .retina4k60,
-             .native5k, .native5k60Experimental, .matchReceiver:
+             .native5k, .native5k60Experimental:
             // Five surfaces protect WindowServer from starvation during
             // high-frame-rate 4K capture while the serial pipeline prevents an
             // application-side frame backlog.
             return 5
+        case .matchReceiver:
+            // Two is the shallowest depth that still measured smooth over
+            // Thunderbolt. Each queued surface is a frame that may sit waiting,
+            // and this preset trades the starvation headroom above for latency.
+            // Raise via QD=5 if sustained full-screen motion starts to judder.
+            return 2
         }
     }
 
@@ -247,7 +253,15 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         if let envVal = ProcessInfo.processInfo.environment["MPVP"], let parsed = Int(envVal) {
             return parsed
         }
-        return 3
+        switch self {
+        case .matchReceiver:
+            // One packet outstanding. The other presets are sized for a link
+            // that might stall; this one assumes wired Thunderbolt at ~0.6ms
+            // RTT, where a send queue only adds latency.
+            return 1
+        default:
+            return 3
+        }
     }
 
     var maxFrameDelayCount: Int {
@@ -272,7 +286,16 @@ enum TBDisplayCapturePreset: String, CaseIterable, Identifiable {
         if let envVal = ProcessInfo.processInfo.environment["MIFEF"], let parsed = Int(envVal) {
             return parsed
         }
-        return 5
+        switch self {
+        case .matchReceiver:
+            // Capture waits for the previous encode to finish rather than
+            // queueing up to five frames behind it. Hardware HEVC clears a
+            // ~9.5 MP frame well inside the 16.7ms budget at 60fps, so the
+            // queue was pure added latency.
+            return 1
+        default:
+            return 5
+        }
     }
 
     var captureResolution: SCCaptureResolutionType {

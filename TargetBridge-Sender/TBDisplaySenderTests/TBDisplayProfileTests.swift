@@ -153,3 +153,32 @@ final class TBCapturePresetSizeTests: XCTestCase {
         XCTAssertEqual(TBDisplayCapturePreset.native5k.averageBitRate(for: ignored), 120_000_000)
     }
 }
+
+final class TBLatencyTuningTests: XCTestCase {
+    /// `.matchReceiver` targets a wired Thunderbolt link, so it runs shallower
+    /// buffers than the presets sized for a link that might stall.
+    func testMatchReceiverUsesShallowerBuffersThanTheFixedPresets() {
+        let tuned = TBDisplayCapturePreset.matchReceiver
+        let conservative = TBDisplayCapturePreset.native5k
+
+        XCTAssertEqual(tuned.maxInFlightEncodeFrames, 1)
+        XCTAssertEqual(tuned.maxPendingVideoPackets, 1)
+        XCTAssertEqual(tuned.queueDepth, 2)
+
+        XCTAssertGreaterThan(conservative.maxInFlightEncodeFrames, tuned.maxInFlightEncodeFrames)
+        XCTAssertGreaterThan(conservative.maxPendingVideoPackets, tuned.maxPendingVideoPackets)
+        XCTAssertGreaterThan(conservative.queueDepth, tuned.queueDepth)
+    }
+
+    /// The fixed presets keep upstream's values; this change is inert unless
+    /// `.matchReceiver` is selected.
+    func testFixedPresetBufferingIsUnchanged() {
+        for preset in [TBDisplayCapturePreset.standard1440p, .smooth1440p60, .crisp2160p60,
+                       .retina4k60, .native5k, .native5k60Experimental] {
+            XCTAssertEqual(preset.maxInFlightEncodeFrames, 5, "\(preset)")
+            XCTAssertEqual(preset.maxPendingVideoPackets, 3, "\(preset)")
+        }
+        XCTAssertEqual(TBDisplayCapturePreset.standard1440p.queueDepth, 3)
+        XCTAssertEqual(TBDisplayCapturePreset.native5k.queueDepth, 5)
+    }
+}
