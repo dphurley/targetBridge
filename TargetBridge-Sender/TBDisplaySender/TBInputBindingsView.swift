@@ -7,55 +7,60 @@ struct TBInputBindingsView: View {
     let language: TBDisplaySenderLanguage
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(TBDisplaySenderL10n.text("sender.input_bindings.title", language))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                TBLabel(
+                    TBDisplaySenderL10n.text("sender.input_bindings.title", language),
+                    tint: TBTheme.textSecondary
+                )
                 Spacer()
-                Button {
+                Button(TBDisplaySenderL10n.text("sender.input_bindings.add", language)) {
                     session.inputBindings.append(
                         TBInputBinding(
                             trigger: TBInputShortcut(keyCode: 123, modifiers: TBInputShortcut.control | TBInputShortcut.option),
                             action: TBInputShortcut(keyCode: 123, modifiers: TBInputShortcut.control)
                         )
                     )
-                } label: {
-                    Label(TBDisplaySenderL10n.text("sender.input_bindings.add", language), systemImage: "plus")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(TBTextActionStyle(accented: true))
             }
 
             if session.inputBindings.isEmpty {
                 Text(TBDisplaySenderL10n.text("sender.input_bindings.empty", language))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(TBFont.body(11))
+                    .foregroundStyle(TBTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 ForEach($session.inputBindings) { $binding in
-                    HStack(spacing: 8) {
+                    HStack(spacing: 10) {
                         Toggle("", isOn: $binding.enabled)
                             .labelsHidden()
                             .toggleStyle(.checkbox)
+
                         TBShortcutRecorderButton(shortcut: $binding.trigger, language: language)
+
                         Image(systemName: "arrow.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 9))
+                            .foregroundStyle(TBTheme.textDim)
+
                         TBShortcutRecorderButton(shortcut: $binding.action, language: language)
+
                         Spacer()
-                        Button(role: .destructive) {
+
+                        Button {
                             session.inputBindings.removeAll { $0.id == binding.id }
                         } label: {
-                            Image(systemName: "trash")
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9))
                         }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(TBTextActionStyle(size: 9))
                     }
                 }
             }
 
             Text(TBDisplaySenderL10n.text("sender.input_bindings.details", language))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(TBFont.body(11))
+                .foregroundStyle(TBTheme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -73,12 +78,10 @@ struct TBShortcutRecorderButton: View {
             toggleRecording()
         } label: {
             Text(recording ? TBDisplaySenderL10n.text("sender.input_bindings.record", language) : shortcut.displayString)
-                .font(.system(.body, design: .rounded).monospacedDigit())
-                .frame(minWidth: 64)
+                .font(TBFont.mono(11))
+                .frame(minWidth: 84)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .tint(recording ? .accentColor : nil)
+        .buttonStyle(TBRecorderButtonStyle(recording: recording))
         .onDisappear(perform: stopRecording)
     }
 
@@ -112,5 +115,29 @@ struct TBShortcutRecorderButton: View {
             self.monitor = nil
         }
         recording = false
+    }
+}
+
+/// Shortcut field: reads as an input, turns coral while it is listening.
+private struct TBRecorderButtonStyle: ButtonStyle {
+    let recording: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(recording ? TBTheme.accent : TBTheme.textSecondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(recording ? TBTheme.accent.opacity(0.08) : Color.white.opacity(0.03))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(
+                        recording ? TBTheme.accent.opacity(0.35) : Color.white.opacity(0.07),
+                        lineWidth: 1
+                    )
+            }
+            .contentShape(Rectangle())
     }
 }
